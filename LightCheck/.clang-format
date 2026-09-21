@@ -1,0 +1,54 @@
+# STM32 embedded C/C++ formatting style
+BasedOnStyle: LLVM
+Language: Cpp
+
+# Indentation
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+IndentCaseLabels: true
+IndentPPDirectives: None
+
+# Line layout
+ColumnLimit: 120
+BreakBeforeBraces: Attach
+BinPackArguments: false
+BinPackParameters: false
+
+# Spacing and pointers
+PointerAlignment: Right
+DerivePointerAlignment: false
+SpaceBeforeParens: ControlStatements
+
+# Keep control flow and functions readable
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+
+# Preserve CubeMX and project include ordering
+SortIncludes: Never
+IncludeBlocks: Preserve
+
+# Comments and file ending
+ReflowComments: true
+InsertNewlineAtEOF: true
+# Align adjacent declarations, assignments, and macros
+AlignConsecutiveDeclarations:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+  AlignCompound: true
+  PadOperators: true
+
+AlignConsecutiveMacros:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false

@@ -1,0 +1,20 @@
+{
+  "serial": {
+    "port": "COM1",
+    "baudrate": 115200,
+    "bytesize": 8,
+    "parity": "None",
+    "stopbits": 1,
+    "timeout_ms": 1000
+  },
+  "servo": {
+    "default_motor": 1,
+    "polling_interval_ms": 500,
+    "enable_polling": false,
+    "default_write_mode": 1
+  },
+  "log": {
+    "auto_save": true,
+    "log_dir": "logs"
+  }
+}
