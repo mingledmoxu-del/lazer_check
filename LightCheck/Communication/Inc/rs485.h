@@ -12,7 +12,7 @@ typedef struct rs485_handle_s {
     uint32_t            frame_gap_ms;
 } rs485_handle_t;
 
-/* GPIO/UART 须先初始化。仅支持当前项目的 9600/8N2，使用 6ms 帧边界。 */
+/* GPIO/UART须先初始化。波特率由motor_config.h配置，8N2，帧边界按速率计算。 */
 modbus_result_t rs485_init(
     rs485_handle_t *port, UART_HandleTypeDef *huart, GPIO_TypeDef *dir_port, uint16_t dir_pin, GPIO_PinState tx_level);
 /* 阻塞方法：只能在主循环/线程调用，UART 必须独占。 */

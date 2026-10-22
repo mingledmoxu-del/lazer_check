@@ -68,7 +68,7 @@ _estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);    /* end of RAM */
 _sstack = _estack - _Min_Stack_Size;
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0x200;      /* required amount of heap  */
-_Min_Stack_Size = 0x400; /* required amount of stack */
+_Min_Stack_Size = 0x2000; /* network/protocol foreground stack reserve */
 
 /* Define output sections */
 SECTIONS
@@ -228,6 +228,12 @@ SECTIONS
   PROVIDE( __non_tls_bss_start = ADDR(.bss) );
 
   /* DMA1/2 cannot access DTCM. Keep peripheral DMA buffers in D2 SRAM. */
+  .eth_dma (NOLOAD) :
+  {
+    . = ALIGN(32);
+    *(.eth_dma*)
+    . = ALIGN(32);
+  } >RAM_D2
   .dma_buffer (NOLOAD) :
   {
     . = ALIGN(32);

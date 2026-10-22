@@ -1,0 +1,11 @@
+#ifndef NETWORK_CONFIG_H
+#define NETWORK_CONFIG_H
+#ifndef PC_USE_ETHERNET
+#define PC_USE_ETHERNET 1
+#endif
+#define NETWORK_IP_A 192
+#define NETWORK_IP_B 168
+#define NETWORK_IP_C 10
+#define NETWORK_IP_D 50
+#define NETWORK_TCP_PORT 5000
+#endif

@@ -22,6 +22,7 @@
 
 /* USER CODE BEGIN 0 */
 #include "pc_comm.h"
+#include "motor_config.h"
 
 /* USER CODE END 0 */
 
@@ -85,7 +86,7 @@ void MX_USART3_UART_Init(void)
 
   /* USER CODE END USART3_Init 1 */
   huart3.Instance = USART3;
-  huart3.Init.BaudRate = 9600;
+  huart3.Init.BaudRate = MOTOR_RS485_BAUD;
   huart3.Init.WordLength = UART_WORDLENGTH_8B;
   huart3.Init.StopBits = UART_STOPBITS_2;
   huart3.Init.Parity = UART_PARITY_NONE;

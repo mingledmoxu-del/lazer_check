@@ -1,4 +1,7 @@
-# P100S Windows 工具与 STM32 协议
+# P100S Windows 工具与 STM32 协议（历史版本）
+
+此文档描述已停用的 `desktop` ASCII 协议上位机，不适用于当前 `simple_app` 二进制协议版本。
+旧程序已移入 `../_archive/legacy-upper-computers-20261013.zip`；当前入口与说明见 [simple_app/README.md](../simple_app/README.md)。
 
 工具位于 `desktop`，依赖 Python 3.10+、PySide6、pyserial。运行 `py -m pip install -r requirements.txt` 后执行 `py main.py`。工具默认不连接、不使能、不恢复运动；“模拟设备”用于无硬件验证。
 

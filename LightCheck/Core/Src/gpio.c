@@ -22,6 +22,7 @@
 #include "gpio.h"
 
 /* USER CODE BEGIN 0 */
+#include "motor_config.h"
 
 /* USER CODE END 0 */
 
@@ -66,6 +67,16 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(RS485_RE_GPIO_Port, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* J7 DI0/PF5 and DI1/PF4, after the board's 24 V optocouplers. */
+  __HAL_RCC_GPIOF_CLK_ENABLE();
+  /* DI0..DI5 -> PF5..PF0. Sampling alone does not arm any interlock. */
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(MOTOR_LIMIT_GPIO_Port, &GPIO_InitStruct);
+  /* USER CODE END MX_GPIO_Init_2 */
 
 }
 

@@ -28,6 +28,11 @@
 #include "pc_protocol.h"
 #include "pc_comm.h"
 #include "command_manager.h"
+#include "limit_debug.h"
+#include "network_config.h"
+#if PC_USE_ETHERNET
+#include "network.h"
+#endif
 
 /* USER CODE END Includes */
 
@@ -40,6 +45,8 @@
 /* USER CODE BEGIN PD */
 /* 按原理图确认 PC12 高电平发送、低电平接收。 */
 #define P100S_RS485_TX_LEVEL GPIO_PIN_SET
+/* Temporary ASCII diagnostics on the PC UART; set to 0 for normal binary use. */
+#define LIMIT_SERIAL_DEBUG 0
 
 /* USER CODE END PD */
 
@@ -56,6 +63,7 @@ static modbus_handle_t servo_bus;
 static p100s_handle_t servo_motors[2];
 static pc_protocol_t pc_protocol;
 static command_manager_t command_manager;
+static volatile uint8_t limits_ready;
 
 /* USER CODE END PV */
 
@@ -92,7 +100,7 @@ int main(void)
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
-
+  
   /* Configure the system clock */
   SystemClock_Config();
 
@@ -103,7 +111,9 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART3_UART_Init();
+#if !PC_USE_ETHERNET
   MX_USART1_UART_Init();
+#endif
   /* USER CODE BEGIN 2 */
   if (rs485_init(&servo_port, &huart3, RS485_RE_GPIO_Port, RS485_RE_Pin,
                  P100S_RS485_TX_LEVEL) != MODBUS_OK ||
@@ -114,9 +124,19 @@ int main(void)
   }
   Command_Manager_Init(&command_manager, &servo_motors[0], &servo_motors[1], &huart1);
   PC_Protocol_Init(&pc_protocol, Command_Process, &command_manager);
+#if PC_USE_ETHERNET
+  if (Network_Init(&pc_protocol, &command_manager) != HAL_OK) {
+    Error_Handler();
+  }
+#else
   if (PC_Comm_Init(&huart1, &pc_protocol) != HAL_OK) {
     Error_Handler();
   }
+#endif
+#if MOTOR_LIMITS_ENABLED && LIMIT_SERIAL_DEBUG
+  LimitDebug_Init(&huart1);
+#endif
+  limits_ready = 1U;
 
   /* USER CODE END 2 */
 
@@ -128,6 +148,10 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     PC_Comm_Task();
+    Command_Manager_Task(&command_manager);
+#if MOTOR_LIMITS_ENABLED && LIMIT_SERIAL_DEBUG
+    LimitDebug_Task();
+#endif
   }
   /* USER CODE END 3 */
 }
@@ -192,6 +216,24 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void Motor_Limits_Tick(void)
+{
+  if (limits_ready != 0U) {
+    uint8_t raw=0;
+    for (unsigned ch=0;ch<6;++ch)
+      if (HAL_GPIO_ReadPin(GPIOF,(uint16_t)(GPIO_PIN_5>>ch))==GPIO_PIN_SET) raw|=(uint8_t)(1U<<ch);
+    Command_Manager_SampleInputs(&command_manager,raw);
+#if MOTOR_LIMITS_ENABLED
+    uint8_t raw1 = (uint8_t)(HAL_GPIO_ReadPin(MOTOR_LIMIT_GPIO_Port, MOTOR1_LIMIT_Pin) == GPIO_PIN_SET);
+    uint8_t raw2 = (uint8_t)(HAL_GPIO_ReadPin(MOTOR_LIMIT_GPIO_Port, MOTOR2_LIMIT_Pin) == GPIO_PIN_SET);
+    Command_Manager_SampleLimits(&command_manager, raw1, raw2);
+#if LIMIT_SERIAL_DEBUG
+    LimitDebug_Sample(0U, raw1, &command_manager.limits[0]);
+    LimitDebug_Sample(1U, raw2, &command_manager.limits[1]);
+#endif
+#endif
+  }
+}
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
@@ -228,6 +270,18 @@ void MPU_Config(void)
   MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
   MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
 
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+  /* DMA descriptors and Ethernet payloads: normal, non-cacheable D2 SRAM. */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x30000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_256KB;
+  MPU_InitStruct.SubRegionDisable = 0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */
   HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);

@@ -1,4 +1,5 @@
 #include "rs485.h"
+#include "motor_config.h"
 #include <string.h>
 
 static void rs485_set_receive(rs485_handle_t *port) {
@@ -11,7 +12,7 @@ modbus_result_t rs485_init(
         return MODBUS_ERROR_ARGUMENT;
     memset(port, 0, sizeof(*port));
     if (huart == NULL || dir_port == NULL || dir_pin == 0U || (dir_pin & (dir_pin - 1U)) != 0U ||
-        (tx_level != GPIO_PIN_RESET && tx_level != GPIO_PIN_SET) || huart->Init.BaudRate != 9600U ||
+        (tx_level != GPIO_PIN_RESET && tx_level != GPIO_PIN_SET) || huart->Init.BaudRate != MOTOR_RS485_BAUD ||
         huart->Init.WordLength != UART_WORDLENGTH_8B || huart->Init.StopBits != UART_STOPBITS_2 ||
         huart->Init.Parity != UART_PARITY_NONE)
         return MODBUS_ERROR_ARGUMENT;
@@ -19,7 +20,10 @@ modbus_result_t rs485_init(
     port->dir_port     = dir_port;
     port->dir_pin      = dir_pin;
     port->tx_level     = tx_level;
-    port->frame_gap_ms = 6U;
+    /* 8N2: 11 bits/character; >=3.5 characters, and >=1.75ms above 19200.
+       Millisecond HAL timers require rounding up. */
+    port->frame_gap_ms = (38500U + MOTOR_RS485_BAUD - 1U) / MOTOR_RS485_BAUD;
+    if (port->frame_gap_ms < 2U) port->frame_gap_ms = 2U;
     rs485_set_receive(port);
     return MODBUS_OK;
 }

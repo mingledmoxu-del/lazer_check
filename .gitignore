@@ -1,0 +1,27 @@
+# Generated Python / native build files
+__pycache__/
+*.py[cod]
+build/
+*.o
+*.obj
+*.su
+
+# Local scratch, extracted manuals and backup archives
+/tmp/
+/_archive/
+/app.zip
+/LightCheck.zip
+/hardware_extract.txt
+/p100s_comm.txt
+/p100s_protocol_pages.txt
+/p100s_review.txt
+*.log
+.env
+.env.*
+!.env.example
+
+# Publish the current verified bundle; older bundles stay local
+/output/*
+!/output/firmware/
+/output/firmware/*
+!/output/firmware/v3.8.6-fast-settle-h7/

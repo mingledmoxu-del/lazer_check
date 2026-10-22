@@ -61,6 +61,9 @@ void Error_Handler(void);
 #define RS485_RE_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
+#define MOTOR1_LIMIT_Pin GPIO_PIN_5
+#define MOTOR2_LIMIT_Pin GPIO_PIN_4
+#define MOTOR_LIMIT_GPIO_Port GPIOF
 
 /* USER CODE END Private defines */
 

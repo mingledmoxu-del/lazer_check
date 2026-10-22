@@ -1,0 +1,27 @@
+{
+  "target": "STM32F407VE (board pinout pending confirmation)",
+  "configuration": "Release",
+  "flash_address": "0x08000000",
+  "hardware_tested": false,
+  "host_test_groups_passed": 8,
+  "files": {
+    "LightCheck_F407.elf": {
+      "bytes": 52388,
+      "sha256": "82ee49d8a43cdd8bf45a07681479b5ba22c87daae6577197b725219d8ccf5c03"
+    },
+    "LightCheck_F407.hex": {
+      "bytes": 68106,
+      "sha256": "f981f62f5351128470d9864df0e0952ad5b269be04ced8e954a3f650c1987261"
+    },
+    "LightCheck_F407.bin": {
+      "bytes": 24180,
+      "sha256": "67d3e3153883edcdf4a546d9ea3c40fbe31f19032771fe8f9af45de920d004c2"
+    }
+  },
+  "validation": {
+    "hex_bin_match": true,
+    "initial_stack": "0x20020000",
+    "reset_vector": "0x8005cfd",
+    "business_files_matching_h743": 29
+  }
+}

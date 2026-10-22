@@ -26,6 +26,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
+option(PC_ETHERNET "Use CN2 main Ethernet port instead of UART1" ON)
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
@@ -45,6 +46,12 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Communication/Src/crc16.c
+    Communication/Src/axis_motion.c
+    Communication/Src/axis_guard.c
+    Communication/Src/axis_guard_controller.c
+    Communication/Src/trajectory.c
+    Communication/Src/limit_switch.c
+    Communication/Src/limit_debug.c
     Communication/Src/pc_protocol.c
     Communication/Src/pc_comm.c
     Communication/Src/command_manager.c
@@ -75,3 +82,19 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+
+file(GLOB LWIP_CORE CONFIGURE_DEPENDS Middlewares/Third_Party/LwIP/src/core/*.c)
+file(GLOB LWIP_IPV4 CONFIGURE_DEPENDS Middlewares/Third_Party/LwIP/src/core/ipv4/*.c)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${LWIP_CORE} ${LWIP_IPV4}
+    Middlewares/Third_Party/LwIP/src/netif/ethernet.c
+    Network/Src/ethernet_port.c Network/Src/network.c Network/Src/pc_comm_net.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_eth.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_eth_ex.c)
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE Network/Inc Middlewares/Third_Party/LwIP/src/include)
+target_include_directories(STM32_Drivers PRIVATE Network/Inc Middlewares/Third_Party/LwIP/src/include)
+if(PC_ETHERNET)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PC_USE_ETHERNET=1)
+else()
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PC_USE_ETHERNET=0)
+endif()

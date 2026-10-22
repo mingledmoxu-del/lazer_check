@@ -1,3 +1,5 @@
+#include "network_config.h"
+#if !PC_USE_ETHERNET
 #include "pc_comm.h"
 #include <string.h>
 
@@ -104,3 +106,4 @@ HAL_StatusTypeDef PC_Comm_SendResponseData(uint8_t device_id, uint8_t command, p
     uint16_t size=PC_Protocol_BuildResponseData(frame,sizeof(frame),device_id,command,status,parameter,data,data_length);
     return size == 0U ? HAL_ERROR : HAL_UART_Transmit(g_uart,frame,size,100U);
 }
+#endif

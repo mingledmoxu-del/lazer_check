@@ -60,6 +60,15 @@ static void parse(pc_protocol_t *p)
             c.data_length = (uint8_t)data_len;
             if (data_len <= PC_PROTOCOL_MAX_DATA) memcpy(c.data, p->buffer + 7U, data_len);
             switch (c.command) {
+            case PC_CMD_TRAJECTORY_BEGIN: c.valid_payload=(uint8_t)(data_len==20U); break;
+            case PC_CMD_TRAJECTORY_POINT: c.valid_payload=(uint8_t)(data_len==14U); break;
+            case PC_CMD_TRAJECTORY_SEAL:
+            case PC_CMD_TRAJECTORY_START:
+            case PC_CMD_TRAJECTORY_STATUS:
+            case PC_CMD_TRAJECTORY_STOP:
+            case PC_CMD_TRAJECTORY_KEEPALIVE: c.valid_payload=(uint8_t)(data_len==0U); break;
+            case PC_CMD_TRAJECTORY_CLEAR: c.valid_payload=(uint8_t)(data_len==0U); break;
+            case PC_CMD_READ_AXES: c.valid_payload=(uint8_t)(data_len==0U && c.parameter==0U); break;
             case PC_CMD_WRITE_PA:       c.valid_payload = (uint8_t)(data_len == 3U); break;
             case PC_CMD_READ_PA:
             case PC_CMD_SERVO_ON:
@@ -72,8 +81,29 @@ static void parse(pc_protocol_t *p)
             case PC_CMD_RESET_ALARM:
             case PC_CMD_EMERGENCY_STOP: c.valid_payload = (uint8_t)(data_len == 0U); break;
             case PC_CMD_SET_SPEED:      c.valid_payload = (uint8_t)(data_len == 2U); break;
+            case PC_CMD_LIMIT_DEBUG:    c.valid_payload = (uint8_t)(data_len == 1U); break;
+            case PC_CMD_ROTATE_CONTINUOUS: c.valid_payload = (uint8_t)(data_len == 4U); break;
+            case PC_CMD_ROTATE_KEEPALIVE: c.valid_payload = (uint8_t)(data_len == 0U); break;
+            case PC_CMD_READ_FEEDBACK:
+            case PC_CMD_READ_GUARD:
+            case PC_CMD_SET_ZERO: c.valid_payload = (uint8_t)(data_len == 0U); break;
+            case PC_CMD_SET_REFERENCE: c.valid_payload=(uint8_t)(data_len==4U); break;
+            case PC_CMD_CONFIG_DUAL_LIMIT: c.valid_payload=(uint8_t)(data_len==14U && c.parameter==0x444CU); break;
+            case PC_CMD_READ_DUAL_LIMIT: c.valid_payload=(uint8_t)(data_len==0U && c.parameter==0U); break;
+            case PC_CMD_HOME_DUAL_LIMIT: c.valid_payload=(uint8_t)(data_len==13U && (c.parameter==0x4448U || c.parameter==0x4449U)); break;
+            case PC_CMD_HOME: c.valid_payload = (uint8_t)(data_len == 16U); break;
+            case PC_CMD_CONFIG_GUARD:
+                c.valid_payload = (uint8_t)((c.parameter == 1U && data_len == 4U) ||
+                    (c.parameter == 2U && data_len == 8U) || (c.parameter == 3U && data_len == 2U) ||
+                    (c.parameter == 4U && data_len == 0U));
+                break;
             case PC_CMD_MOVE_RELATIVE:
-            case PC_CMD_MOVE_ABSOLUTE:  c.valid_payload = (uint8_t)(data_len == 6U); break;
+            case PC_CMD_MOVE_ABSOLUTE:
+            case PC_CMD_MOVE_OUTPUT_RELATIVE:
+            case PC_CMD_SET_MOTION_PROFILE:
+                                        c.valid_payload = (uint8_t)(data_len == 6U); break;
+            case PC_CMD_MOVE_OUTPUT_TRACKED:
+                c.valid_payload=(uint8_t)(data_len==6U && c.parameter==PC_POINT_TRACK_KEY);break;
             case PC_CMD_JOG:            c.valid_payload = (uint8_t)(data_len == 7U); break;
             default:                    c.valid_payload = 0U; break;
             }

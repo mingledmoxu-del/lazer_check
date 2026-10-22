@@ -189,6 +189,8 @@ void SysTick_Handler(void)
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
+  extern void Motor_Limits_Tick(void);
+  Motor_Limits_Tick();
 
   /* USER CODE END SysTick_IRQn 1 */
 }
