@@ -12,9 +12,12 @@ $lwip = @(Get-ChildItem -Path (Join-Path $firmwareRoot 'Middlewares/Third_Party/
 $networkSources = $lwip + @('Middlewares/Third_Party/LwIP/src/netif/ethernet.c',
     'Communication/Src/pc_protocol.c','Communication/Src/crc16.c')
 $cases = @(
+    @{Name='p100s'; File='tests/test_p100s.c'; Sources=@('Motor_driver/Src/p100s.c','Communication/Src/modbus_rtu.c','Communication/Src/crc16.c'); Defines=@()},
     @{Name='stop'; File='tests/test_stop.c'; Sources=$common; Defines=@()},
     @{Name='position_execution'; File='tests/test_position_execution.c'; Sources=$common; Defines=@()},
     @{Name='point_tracking'; File='tests/test_point_tracking.c'; Sources=$common; Defines=@()},
+    @{Name='point_latency'; File='tests/test_point_latency.c'; Sources=$common; Defines=@()},
+    @{Name='point_bank'; File='tests/test_point_bank.c'; Sources=$common; Defines=@()},
     @{Name='no_limits'; File='tests/test_limits.c'; Sources=$common; Defines=@()},
     @{Name='legacy_limits'; File='tests/test_limits.c'; Sources=$common; Defines=@('-DMOTOR_LIMITS_ENABLED=1')},
     @{Name='guard'; File='tests/test_guard.c'; Sources=$common; Defines=@()},

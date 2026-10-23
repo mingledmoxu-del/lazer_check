@@ -42,6 +42,10 @@ class BusinessPanel:
 
     def available(self):
         a=self.app;p=getattr(a,"trajectory_panel",None)
+        joint=getattr(a,"joint_timing_panel",None)
+        if joint and joint.phase:
+            messagebox.showwarning("联动计时中","请先停止两轴联动计时。",parent=a.root)
+            return False
         debug=getattr(a,"debug_panel",None)
         if not self.phase and debug is not None:debug.release_idle_owner(1)
         busy=(self.phase or not a.port or (a.pending and not getattr(a,"pending_background",False)) or getattr(a,"deferred_send",None) or

@@ -69,6 +69,8 @@ static pc_status_t map_status(modbus_result_t r)
 
 static uint8_t is_supported(uint8_t command)
 {
+    if (command==PC_CMD_MOVE_AXES_POINT || command==PC_CMD_POINT_TIMING) return 1U;
+    if (command>=PC_CMD_BANK_BEGIN && command<=PC_CMD_BANK_STATUS) return 1U;
     if (command==PC_CMD_MOVE_OUTPUT_TRACKED) return 1U;
     if (command>=PC_CMD_TRAJECTORY_BEGIN && command<=PC_CMD_TRAJECTORY_CLEAR) return 1U;
     if (command>=PC_CMD_READ_FEEDBACK && command<=PC_CMD_HOME_DUAL_LIMIT) return 1U;
@@ -110,6 +112,21 @@ static modbus_result_t read_register(p100s_handle_t *motor, uint16_t address, ui
 static modbus_result_t write_pa_temp(p100s_handle_t *motor, uint16_t number, uint16_t value)
 {
     return p100s_write_parameter(motor, P100S_GROUP_PA, number, value, P100S_STORAGE_TEMPORARY);
+}
+
+/* One holding-register range transaction; conservative single-read fallback
+   for drive revisions rejecting a range. Never retry an ambiguous write. */
+static modbus_result_t read_parameters(p100s_handle_t *motor,p100s_parameter_group_t group,
+                                      uint16_t first,uint16_t count,uint16_t *values)
+{
+    modbus_result_t r=modbus_read_holding(motor->bus,motor->slave_id,(uint16_t)group+first,count,values);
+    if (r==MODBUS_ERROR_EXCEPTION) {
+        for (uint16_t n=0;n<count;++n) {
+            r=p100s_read_parameter(motor,group,(uint16_t)(first+n),values+n);
+            if (r!=MODBUS_OK) break;
+        }
+    }
+    return r;
 }
 
 static modbus_result_t write_pa_temp_verified(p100s_handle_t *motor, uint16_t number, uint16_t value)
@@ -253,12 +270,11 @@ static modbus_result_t prepare_speed(p100s_handle_t *motor)
     /* Internal speed 1 requires SP1=SP2=OFF and CINV=OFF. Refuse physical
        mappings that could select another (possibly nonzero) speed or reverse
        direction later; never rewrite the user's SON/DI assignments. */
-    for (uint16_t di = 0U; di < 6U; ++di) {
-        uint16_t function = 0U;
-        modbus_result_t check = p100s_read_parameter(motor, P100S_GROUP_P3, di, &function);
-        if (check != MODBUS_OK) return check;
-        if (function >= 9U && function <= 11U) return MODBUS_ERROR_ARGUMENT;
-    }
+    uint16_t functions[6];
+    modbus_result_t check=read_parameters(motor,P100S_GROUP_P3,0U,6U,functions);
+    if (check!=MODBUS_OK) return check;
+    for (unsigned di=0;di<6U;++di)
+        if (functions[di]>=9U && functions[di]<=11U) return MODBUS_ERROR_ARGUMENT;
     /* External SON is the motion authority. 0x1016 is telemetry and some
        drive revisions do not report state 3 until motion has started. */
     /* Clear the previous internal speed BEFORE changing CMODE, otherwise an
@@ -269,6 +285,83 @@ static modbus_result_t prepare_speed(p100s_handle_t *motor)
     if (result == MODBUS_OK) result = select_mixed_control_mode(motor, 1U);
     if (result == MODBUS_OK) result = write_pa_temp(motor, P100S_PA_SPEED_SOURCE, 1U);
     return result;
+}
+
+typedef struct {
+    uint16_t mode,ppr,profile[2],functions[6],forced,source,setpoint;
+} point_setup_t;
+
+/* Read current values in two ranges (33 and 32 words, below the drive's
+   documented 100-word maximum). Remember only explicit range rejection,
+   never values; CRC/timeouts must abort without a retry. */
+static modbus_result_t read_point_setup(command_manager_t *m,uint8_t i,point_setup_t *s)
+{
+    p100s_handle_t *motor=m->motors[i];uint16_t words[33];
+    modbus_result_t r=MODBUS_ERROR_EXCEPTION;
+    if (!(m->point_range_unsupported[i]&1U)) {
+        r=modbus_read_holding(motor->bus,motor->slave_id,0x0100U,33U,words);
+        if (r==MODBUS_ERROR_EXCEPTION) m->point_range_unsupported[i]|=1U;
+    }
+    if (r==MODBUS_OK) {
+        memcpy(s->functions,words,sizeof(s->functions));s->forced=words[16];s->mode=words[32];
+    } else if (r==MODBUS_ERROR_EXCEPTION) {
+        r=read_parameters(motor,P100S_GROUP_P3,0U,6U,s->functions);
+        if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_P3,16U,&s->forced);
+        if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_P3,32U,&s->mode);
+    }
+    if (r!=MODBUS_OK) return r;
+    r=MODBUS_ERROR_EXCEPTION;
+    if (!(m->point_range_unsupported[i]&2U)) {
+        r=modbus_read_holding(motor->bus,motor->slave_id,11U,32U,words);
+        if (r==MODBUS_ERROR_EXCEPTION) m->point_range_unsupported[i]|=2U;
+    }
+    if (r==MODBUS_OK) {
+        s->ppr=words[0];s->source=words[11];s->setpoint=words[13];
+        s->profile[0]=words[30];s->profile[1]=words[31];
+    } else if (r==MODBUS_ERROR_EXCEPTION) {
+        r=p100s_read_parameter(motor,P100S_GROUP_PA,11U,&s->ppr);
+        if (r==MODBUS_OK) r=read_parameters(motor,P100S_GROUP_PA,41U,2U,s->profile);
+        if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,22U,&s->source);
+        if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,24U,&s->setpoint);
+    }
+    return r;
+}
+
+static modbus_result_t prepare_point_speed(p100s_handle_t *motor, const point_setup_t *setup)
+{
+    uint16_t functions[6],source=0U,setpoint=0U,forced=0U,control=motor->status.control_mode;
+    modbus_result_t r=MODBUS_OK;
+    if (setup) {
+        memcpy(functions,setup->functions,sizeof(functions));
+        source=setup->source;setpoint=setup->setpoint;forced=setup->forced;
+    } else r=read_parameters(motor,P100S_GROUP_P3,0U,6U,functions);
+    if (r!=MODBUS_OK) return r;
+    for (unsigned n=0;n<6U;++n)
+        if (functions[n]>=9U && functions[n]<=11U) return MODBUS_ERROR_ARGUMENT;
+    if (!setup && r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_P3,P100S_P3_FORCE_2,&forced);
+    if (!setup && r==MODBUS_OK) {
+        uint16_t speeds[3];
+        r=modbus_read_holding(motor->bus,motor->slave_id,P100S_PA_SPEED_SOURCE,3U,speeds);
+        if (r==MODBUS_OK) {source=speeds[0];setpoint=speeds[2];}
+        else if (r==MODBUS_ERROR_EXCEPTION) {
+            /* Some revisions reject PA23 in a range. Read only the two
+               required endpoints; never retry CRC/timeouts or any write. */
+            r=p100s_read_parameter(motor,P100S_GROUP_PA,P100S_PA_SPEED_SOURCE,&source);
+            if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,P100S_PA_INTERNAL_SPEED_1,&setpoint);
+        }
+    }
+    if (r!=MODBUS_OK) return r;
+    /* Reuse only a freshly verified internal-speed mode with no selector or
+       inversion override. Otherwise take the original full preparation path. */
+    if (control==1U && source==1U && (forced&0x87U)==0x80U) {
+        if (setpoint) return write_pa_temp_verified(motor,P100S_PA_INTERNAL_SPEED_1,0U);
+        return MODBUS_OK;
+    }
+    r=prepare_speed(motor);
+    if (r==MODBUS_OK) r=read_register(motor,P100S_REG_CONTROL_MODE,&control);
+    if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,P100S_PA_SPEED_SOURCE,&source);
+    if (r==MODBUS_OK && (control!=1U || source!=1U)) r=MODBUS_ERROR_ARGUMENT;
+    return r;
 }
 
 modbus_result_t Command_Manager_PrepareVelocity(command_manager_t *m, uint8_t index)
@@ -399,7 +492,7 @@ uint16_t Command_Manager_PointFlags(command_manager_t *m,uint8_t i)
 {
     uint16_t flags=m->point_active[i] ? 0x20U : 0U;
     int64_t error=(int64_t)m->motors[i]->status.position-m->point_target[i];
-    int64_t tolerance=m->point_ppr[i]/200U+1U;
+    int64_t tolerance=m->point_tolerance[i] ? m->point_tolerance[i] : m->point_ppr[i]/200U+1U;
     if (m->point_completed[i] && !m->point_active[i] && m->guard[i].zero_valid &&
         !m->guard[i].fault && !m->guard[i].stop_pending && !m->motors[i]->status.alarm_code &&
         m->motors[i]->status.speed_raw==0 && error>=-tolerance && error<=tolerance) flags|=0x40U;
@@ -416,32 +509,38 @@ static void point_fault(command_manager_t *m,uint8_t i,uint8_t reason)
     (void)Command_Manager_StopAxis(m,i);
 }
 
-static modbus_result_t start_point(command_manager_t *m,uint8_t i,int16_t rpm,int32_t delta)
+static modbus_result_t start_point(command_manager_t *m,uint8_t i,int16_t rpm,int32_t delta,uint16_t verified_ppr,const point_setup_t *setup)
 {
+    uint32_t init_started=HAL_GetTick();
+    if (limit_blocked(m,i)) return MODBUS_ERROR_BUSY;
     p100s_handle_t *motor=m->motors[i];
-    modbus_result_t r=p100s_read_status(motor);
+    uint8_t completed=(uint8_t)((Command_Manager_PointFlags(m,i)&0x40U)!=0U);
+    modbus_result_t r=verified_ppr ? MODBUS_OK : p100s_read_status(motor);
     if (r==MODBUS_OK && motor->status.speed_raw!=0) r=Command_Manager_StopAxis(m,i);
-    uint8_t zeros=0U;
+    /* The initial independent read counts. A preceding completed point already
+       supplies two zeros; one new zero revalidates that proof before reuse. */
+    uint8_t zeros=(uint8_t)(r==MODBUS_OK && motor->status.speed_raw==0 ? 1U : 0U);
+    if (completed && zeros && (Command_Manager_PointFlags(m,i)&0x40U)) zeros=2U;
     uint32_t until=HAL_GetTick()+2000U;
     while (r==MODBUS_OK && zeros<2U) {
+        HAL_Delay(20U);
         r=p100s_read_status(motor);
         if (r!=MODBUS_OK) break;
         zeros=motor->status.speed_raw==0 ? (uint8_t)(zeros+1U) : 0U;
         if ((int32_t)(HAL_GetTick()-until)>=0) { r=MODBUS_ERROR_BUSY;break; }
-        if (zeros<2U) HAL_Delay(20U);
     }
     if (r!=MODBUS_OK) {
         point_fault(m,i,r==MODBUS_ERROR_BUSY ? GUARD_EXECUTION : GUARD_COMM);
         return r;
     }
-    uint16_t mode=0U,ppr=0U;
-    uint16_t decel=0U,s_curve=0U;
-    if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_P3,32U,&mode);
-    if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,11U,&ppr);
-    if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,P100S_PA_DECEL_TIME,&decel);
-    if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,P100S_PA_S_CURVE_TIME,&s_curve);
+    uint16_t mode=3U,ppr=verified_ppr;
+    uint16_t profile[2]={0U,0U};
+    if (r==MODBUS_OK && !verified_ppr) r=p100s_read_parameter(motor,P100S_GROUP_P3,32U,&mode);
+    if (r==MODBUS_OK && !verified_ppr) r=p100s_read_parameter(motor,P100S_GROUP_PA,11U,&ppr);
+    if (setup) memcpy(profile,setup->profile,sizeof(profile));
+    else if (r==MODBUS_OK) r=read_parameters(motor,P100S_GROUP_PA,P100S_PA_DECEL_TIME,2U,profile);
     if (r!=MODBUS_OK) return r;
-    if (mode!=3U || !ppr || !decel || decel>10000U || s_curve>1000U || rpm<1 || rpm>5000) return MODBUS_ERROR_ARGUMENT;
+    if (mode!=3U || !ppr || !profile[0] || profile[0]>10000U || profile[1]>1000U || rpm<1 || rpm>5000) return MODBUS_ERROR_ARGUMENT;
     int64_t target=(int64_t)motor->status.position+delta;
     if (target<INT32_MIN || target>INT32_MAX) return MODBUS_ERROR_ARGUMENT;
     axis_guard_t *g=&m->guard[i];
@@ -451,25 +550,217 @@ static modbus_result_t start_point(command_manager_t *m,uint8_t i,int16_t rpm,in
             return MODBUS_ERROR_ARGUMENT;
         if (angle<g->minimum || angle>g->maximum) return MODBUS_ERROR_ARGUMENT;
     }
-    r=Command_Manager_PrepareVelocity(m,i);
-    uint16_t control=0U,source=0U;
-    if (r==MODBUS_OK) r=read_register(motor,P100S_REG_CONTROL_MODE,&control);
-    if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,P100S_PA_SPEED_SOURCE,&source);
-    if (r==MODBUS_OK && (control!=1U || source!=1U)) r=MODBUS_ERROR_ARGUMENT;
+    r=prepare_point_speed(motor,setup);
     if (r!=MODBUS_OK) { point_fault(m,i,GUARD_COMM);return r; }
     m->position_watch[i]=0U;m->point_active[i]=1U;m->point_zero_samples[i]=0U;
     m->point_settling[i]=0U;m->point_completed[i]=0U;
     m->point_target[i]=(int32_t)target;m->point_last[i]=motor->status.position;
     m->point_progress_position[i]=motor->status.position;
     m->point_max_rpm[i]=rpm;m->point_sent_rpm[i]=0;m->point_ppr[i]=ppr;
-    m->point_decel_ms[i]=decel;m->point_s_curve_ms[i]=s_curve;
+    m->point_tolerance[i]=ppr/200U+1U;
+    m->point_decel_ms[i]=profile[0];m->point_s_curve_ms[i]=profile[1];
     m->point_units_at[i]=HAL_GetTick();m->point_sample_at[i]=HAL_GetTick();m->point_sample_valid[i]=1U;
     m->point_poll_at[i]=HAL_GetTick();m->point_progress_at[i]=HAL_GetTick();
     uint64_t duration=(uint64_t)(delta<0 ? -(int64_t)delta : delta)*60000U/((uint64_t)ppr*rpm);
     duration=duration*4U+15000U;
     if (duration>3600000U) duration=3600000U;
     m->point_deadline[i]=HAL_GetTick()+(uint32_t)duration;
+    m->point_init_ms[i]=HAL_GetTick()-init_started;
+    m->point_cycle_started[i]=HAL_GetTick();
+    m->point_cycle_ms[i]=m->point_gap_ms[i]=m->point_max_gap_ms[i]=0U;
     return MODBUS_OK;
+}
+
+static void axes_point(command_manager_t *m,const pc_command_packet_t *c,const pc_command_packet_t *reply_to)
+{
+    uint8_t data[8]={0};pc_status_t status=PC_STATUS_SUCCESS;
+    if (c->device_id!=1U || c->parameter!=PC_AXES_POINT_KEY || (c->data_length!=10U && c->data_length!=12U)) {
+        status=PC_STATUS_ILLEGAL_PARAM;goto reply;
+    }
+    uint16_t tolerance=c->data_length==12U ? read_u16(c->data+10) : 0U;
+    if (c->data_length==12U && (tolerance<10U || tolerance>500U)) {status=PC_STATUS_ILLEGAL_PARAM;goto reply;}
+    if (Trajectory_Active(&m->trajectory) || m->point_active[0] || m->point_active[1]) {
+        status=PC_STATUS_BUSY;goto reply;
+    }
+    for (unsigned i=0;i<2U;++i) {
+        axis_guard_t *g=&m->guard[i];
+        if (g->stop_pending || g->dual_home || g->dual_pending || g->fault ||
+            (g->phase>=HOME_SEEK && g->phase<=HOME_FINAL_STOP) ||
+            m->continuous_active[i] || m->continuous_stop_pending[i]) { status=PC_STATUS_BUSY;goto reply; }
+        if (!g->zero_valid) { status=PC_STATUS_NOT_REFERENCED;goto reply; }
+    }
+    uint32_t trips[2][6];uint8_t monitored[2]={0,0};
+    for (unsigned i=0;i<2U;++i) {
+        axis_guard_t *g=&m->guard[i];
+        uint8_t channels[5]={g->negative,g->positive,g->home,g->dual_channel[0],g->dual_channel[1]};
+        for (unsigned n=0;n<5U;++n)
+            if (channels[n]<6U && ((n<3U && g->hardware_on) || (n>=3U && g->dual_enabled)))
+                monitored[i]|=(uint8_t)(1U<<channels[n]);
+        for (unsigned ch=0;ch<6U;++ch) trips[i][ch]=AxisGuard_Trips(&m->guard_inputs,g,(uint8_t)ch);
+    }
+    m->busy=1U;
+    for (uint8_t i=0;i<2U;++i) {
+        uint32_t began=HAL_GetTick();uint16_t mode=0U,ppr=0U;int32_t angle=0;
+        p100s_handle_t *motor=m->motors[i];axis_motion_command_t motion;
+        point_setup_t setup={0};
+        modbus_result_t r=p100s_read_status(motor);
+        if (r==MODBUS_OK && (motor->status.speed_raw || motor->status.alarm_code)) r=MODBUS_ERROR_BUSY;
+        if (r==MODBUS_OK) r=read_point_setup(m,i,&setup);
+        mode=setup.mode;ppr=setup.ppr;
+        if (r!=MODBUS_OK) { status=map_status(r);goto abort; }
+        if (!AxisGuard_Angle(&m->guard[i],motor->status.position,mode,ppr,
+                            m->gear_ratio_num[i],m->gear_ratio_den[i],&angle)) {
+            m->guard[i].zero_valid=0U;status=PC_STATUS_NOT_REFERENCED;goto abort;
+        }
+        int32_t basis=motor->status.position;
+        int64_t delta=(int64_t)read_i32(c->data+2U+4U*i)-angle;
+        if (delta<INT32_MIN || delta>INT32_MAX) {status=PC_STATUS_RANGE;goto abort;}
+        status=GuardController_PointAllowed(m,i,angle,(int32_t)delta);
+        if (status!=PC_STATUS_SUCCESS) goto abort;
+        if (!AxisMotion_ConvertRelative(read_u16(c->data),(int32_t)delta,
+                m->gear_ratio_num[i],m->gear_ratio_den[i],ppr,&motion)) {
+            /* A zero-distance axis is still armed at its current encoder pose. */
+            if (delta || !AxisMotion_ConvertRelative(read_u16(c->data),1,
+                    m->gear_ratio_num[i],m->gear_ratio_den[i],ppr,&motion)) {
+                status=PC_STATUS_ILLEGAL_PARAM;goto abort;
+            }
+            motion.motor_pulses=0;
+        }
+        if (m->guard[i].angle_sign<0 && motion.motor_pulses==INT32_MIN) {status=PC_STATUS_RANGE;goto abort;}
+        int32_t raw_delta=m->guard[i].angle_sign<0 ? -motion.motor_pulses : motion.motor_pulses;
+        int64_t absolute_target=(int64_t)basis+raw_delta;
+        if (absolute_target<INT32_MIN || absolute_target>INT32_MAX) {status=PC_STATUS_RANGE;goto abort;}
+        r=start_point(m,i,motion.motor_speed_rpm,
+            raw_delta,ppr,&setup);
+        if (r!=MODBUS_OK) {status=map_status(r);goto abort;}
+        m->point_target[i]=(int32_t)absolute_target;
+        if (tolerance) {
+            uint64_t counts=(uint64_t)tolerance*ppr*m->gear_ratio_num[i]/(360000ULL*m->gear_ratio_den[i]);
+            if (!counts) {status=PC_STATUS_ILLEGAL_PARAM;goto abort;}
+            m->point_tolerance[i]=(uint32_t)counts;
+        }
+        put_i32(data+4U*i,(int32_t)(HAL_GetTick()-began));
+    }
+    /* No velocity task runs between preparation of the two axes. Reject a
+       changed sensor input before either task is permitted to start. */
+    for (unsigned i=0;i<2U;++i) for (unsigned ch=0;ch<6U;++ch)
+        if ((monitored[i]&(1U<<ch)) && trips[i][ch]!=AxisGuard_Trips(&m->guard_inputs,&m->guard[i],(uint8_t)ch)) {
+            status=PC_STATUS_LIMIT_ACTIVE;goto abort;
+        }
+    for (unsigned i=0;i<2U;++i) {
+        m->point_poll_at[i]=HAL_GetTick();m->point_cycle_started[i]=HAL_GetTick();
+    }
+    goto armed;
+abort:
+    for (uint8_t i=0;i<2U;++i) {
+        modbus_result_t stopped=Command_Manager_StopAxis(m,i);
+        if (stopped!=MODBUS_OK || status==PC_STATUS_SERVO_NO_RESPONSE || status==PC_STATUS_RS485_ERROR || status==PC_STATUS_CRC_ERROR)
+            point_fault(m,i,GUARD_COMM);
+    }
+armed:
+    m->busy=0U;
+reply:
+    (void)PC_Comm_SendResponseData(reply_to->device_id,reply_to->command,status,reply_to->parameter,data,sizeof(data));
+}
+
+static uint8_t bank_reference(command_manager_t *m,point_bank_t *b)
+{
+    for (unsigned i=0;i<2U;++i) {
+        axis_guard_t *g=&m->guard[i];
+        if (!g->zero_valid || g->origin!=b->origin[i] || g->reference_angle!=b->reference[i] ||
+            g->ppr!=b->ppr[i] || g->angle_sign!=b->sign[i] ||
+            m->gear_ratio_num[i]!=b->ratio_num[i] || m->gear_ratio_den[i]!=b->ratio_den[i]) return 0U;
+    }
+    return 1U;
+}
+static pc_status_t bank_seal(command_manager_t *m,point_bank_t *b)
+{
+    if (!b->count || b->loaded!=b->count) return PC_STATUS_ILLEGAL_PARAM;
+    b->ready=0U;
+    for (uint8_t i=0;i<2U;++i) {
+        axis_guard_t *g=&m->guard[i];p100s_handle_t *motor=m->motors[i];
+        if (!g->zero_valid) return PC_STATUS_NOT_REFERENCED;
+        if (g->fault || g->stop_pending || g->dual_pending || g->dual_home ||
+            (g->phase>=HOME_SEEK && g->phase<=HOME_FINAL_STOP) ||
+            m->continuous_active[i] || m->continuous_stop_pending[i]) return PC_STATUS_BUSY;
+        uint16_t mode=0,ppr=0;int32_t angle=0;
+        point_setup_t setup={0};
+        modbus_result_t r=p100s_read_status(motor);
+        if (r==MODBUS_OK) r=read_point_setup(m,i,&setup);
+        mode=setup.mode;ppr=setup.ppr;
+        if (r!=MODBUS_OK) return map_status(r);
+        if (motor->status.speed_raw || motor->status.alarm_code) return PC_STATUS_BUSY;
+        if (!AxisGuard_Angle(g,motor->status.position,mode,ppr,m->gear_ratio_num[i],m->gear_ratio_den[i],&angle)) {
+            g->zero_valid=0U;return PC_STATUS_NOT_REFERENCED;
+        }
+        for (unsigned n=0;n<b->count;++n) {
+            int64_t delta=(int64_t)b->points[n][i]-angle;axis_motion_command_t converted;
+            if ((g->soft_on && (b->points[n][i]<g->minimum || b->points[n][i]>g->maximum)) ||
+                delta<INT32_MIN || delta>INT32_MAX) return PC_STATUS_RANGE;
+            if (!AxisMotion_ConvertRelative(b->speed,delta ? (int32_t)delta : 1,
+                    m->gear_ratio_num[i],m->gear_ratio_den[i],ppr,&converted)) return PC_STATUS_ILLEGAL_PARAM;
+        }
+        /* Prepare mode once while stationary; no nonzero velocity or point
+           task is issued by a preload. Final independent zero validates it. */
+        r=prepare_point_speed(motor,&setup);
+        if (r==MODBUS_OK) {HAL_Delay(20U);r=p100s_read_status(motor);}
+        if (r!=MODBUS_OK) return map_status(r);
+        if (motor->status.speed_raw || motor->status.alarm_code) return PC_STATUS_BUSY;
+        b->origin[i]=g->origin;b->reference[i]=g->reference_angle;b->ppr[i]=ppr;b->sign[i]=g->angle_sign;
+        b->ratio_num[i]=m->gear_ratio_num[i];b->ratio_den[i]=m->gear_ratio_den[i];
+    }
+    b->ready=1U;return PC_STATUS_SUCCESS;
+}
+static void bank_command(command_manager_t *m,const pc_command_packet_t *c)
+{
+    pc_status_t status=PC_STATUS_SUCCESS;uint8_t data[11]={0};
+    if (c->device_id!=1U || !c->parameter || c->parameter>POINT_BANK_SLOTS) {
+        (void)PC_Comm_SendResponse(c->device_id,c->command,PC_STATUS_ILLEGAL_PARAM,c->parameter,0);return;
+    }
+    point_bank_t *b=&m->point_banks[c->parameter-1U];
+    if (b->ready && !bank_reference(m,b)) b->ready=0U;
+    if (c->command!=PC_CMD_BANK_STATUS &&
+        (m->point_active[0] || m->point_active[1] || Trajectory_Active(&m->trajectory))) {status=PC_STATUS_BUSY;goto reply;}
+    if (c->command!=PC_CMD_BANK_STATUS) for (unsigned i=0;i<2U;++i) {
+        axis_guard_t *g=&m->guard[i];
+        if (m->continuous_active[i] || m->continuous_stop_pending[i] || m->position_watch[i] ||
+            g->stop_pending || g->dual_pending || g->dual_home || (g->phase>=HOME_SEEK && g->phase<=HOME_FINAL_STOP)) {
+            status=PC_STATUS_BUSY;goto reply;
+        }
+    }
+    if (c->command==PC_CMD_BANK_BEGIN) {
+        uint32_t token=(uint32_t)read_i32(c->data);uint16_t speed=read_u16(c->data+4),tolerance=read_u16(c->data+6);uint8_t count=c->data[8];
+        if (!token || token==b->token || !speed || speed>10000U || tolerance<10U || tolerance>500U || !count || count>POINT_BANK_CAPACITY) {status=PC_STATUS_ILLEGAL_PARAM;goto reply;}
+        memset(b,0,sizeof(*b));b->token=token;b->speed=speed;b->tolerance=tolerance;b->count=count;
+    } else if (c->command!=PC_CMD_BANK_STATUS && (uint32_t)read_i32(c->data)!=b->token) {
+        status=PC_STATUS_ILLEGAL_PARAM;
+    } else if (c->command==PC_CMD_BANK_POINT) {
+        uint8_t n=c->data[4];
+        if (!b->token || b->ready || n!=b->loaded || n>=b->count) status=PC_STATUS_ILLEGAL_PARAM;
+        else {b->points[n][0]=read_i32(c->data+5);b->points[n][1]=read_i32(c->data+9);++b->loaded;}
+    } else if (c->command==PC_CMD_BANK_SEAL) {
+        m->busy=1U;status=bank_seal(m,b);m->busy=0U;
+        if (status!=PC_STATUS_SUCCESS) {
+            for (uint8_t i=0;i<2U;++i) if (Command_Manager_StopAxis(m,i)!=MODBUS_OK) point_fault(m,i,GUARD_COMM);
+        }
+    } else if (c->command==PC_CMD_BANK_RUN) {
+        uint8_t n=c->data[4];
+        if (!b->ready || !bank_reference(m,b)) {b->ready=0;status=PC_STATUS_NOT_REFERENCED;}
+        else if (n>=b->count) status=PC_STATUS_ILLEGAL_PARAM;
+        else {
+            pc_command_packet_t run={0};run.device_id=1;run.command=PC_CMD_MOVE_AXES_POINT;
+            run.parameter=PC_AXES_POINT_KEY;run.data_length=12;run.valid_payload=1;
+            run.data[0]=(uint8_t)(b->speed>>8);run.data[1]=(uint8_t)b->speed;
+            put_i32(run.data+2,b->points[n][0]);put_i32(run.data+6,b->points[n][1]);
+            run.data[10]=(uint8_t)(b->tolerance>>8);run.data[11]=(uint8_t)b->tolerance;
+            axes_point(m,&run,c);return;
+        }
+    }
+reply:
+    put_i32(data,(int32_t)b->token);data[4]=(uint8_t)(b->speed>>8);data[5]=(uint8_t)b->speed;
+    data[6]=(uint8_t)(b->tolerance>>8);data[7]=(uint8_t)b->tolerance;
+    data[8]=b->count;data[9]=b->loaded;data[10]=b->ready;
+    (void)PC_Comm_SendResponseData(c->device_id,c->command,status,c->parameter,data,sizeof(data));
 }
 
 static void point_task(command_manager_t *m)
@@ -479,6 +770,10 @@ static void point_task(command_manager_t *m)
     for (uint8_t i=0;i<2U;++i) {
         if (!m->point_active[i] || (int32_t)(HAL_GetTick()-m->point_poll_at[i])<0) continue;
         p100s_handle_t *motor=m->motors[i];axis_guard_t *g=&m->guard[i];
+        uint32_t cycle_started=HAL_GetTick();
+        m->point_gap_ms[i]=cycle_started-m->point_cycle_started[i];
+        if (m->point_gap_ms[i]>m->point_max_gap_ms[i]) m->point_max_gap_ms[i]=m->point_gap_ms[i];
+        m->point_cycle_started[i]=cycle_started;
         if (g->stop_pending || g->fault || limit_blocked(m,i)) {
             point_fault(m,i,g->fault ? g->fault : GUARD_SENSOR);continue;
         }
@@ -487,8 +782,9 @@ static void point_task(command_manager_t *m)
         uint32_t previous_sample=m->point_sample_at[i];
         m->point_sample_valid[i]=0U;
         modbus_result_t r=p100s_read_status(motor);
+        uint32_t sampled_at=HAL_GetTick();
         uint16_t mode=3U,ppr=m->point_ppr[i];
-        if (r==MODBUS_OK && HAL_GetTick()-m->point_units_at[i]>=1000U) {
+        if (r==MODBUS_OK && HAL_GetTick()-m->point_units_at[i]>=100U) {
             r=p100s_read_parameter(motor,P100S_GROUP_P3,32U,&mode);
             if (r==MODBUS_OK) r=p100s_read_parameter(motor,P100S_GROUP_PA,11U,&ppr);
             m->point_units_at[i]=HAL_GetTick();
@@ -496,7 +792,17 @@ static void point_task(command_manager_t *m)
         if (r!=MODBUS_OK) { point_fault(m,i,GUARD_COMM);continue; }
         if (mode!=3U || ppr!=m->point_ppr[i]) { point_fault(m,i,GUARD_FEEDBACK);continue; }
         if (motor->status.alarm_code) { point_fault(m,i,GUARD_ALARM);continue; }
-        m->point_sample_at[i]=HAL_GetTick();m->point_sample_valid[i]=1U;
+        if (g->soft_on) {
+            int32_t angle=0;int32_t margin=g->dual_enabled ? GUARD_DUAL_FEEDBACK_MARGIN : 0;
+            if (!AxisGuard_Angle(g,motor->status.position,mode,ppr,
+                                m->gear_ratio_num[i],m->gear_ratio_den[i],&angle)) {
+                point_fault(m,i,GUARD_FEEDBACK);continue;
+            }
+            if ((int64_t)angle<(int64_t)g->minimum-margin || (int64_t)angle>(int64_t)g->maximum+margin) {
+                point_fault(m,i,GUARD_RANGE);continue;
+            }
+        }
+        m->point_sample_at[i]=sampled_at;m->point_sample_valid[i]=1U;
         int64_t step=(int64_t)motor->status.position-m->point_last[i];
         int64_t noise=ppr/1000U+2U;
         if ((m->point_sent_rpm[i]>0 && step < -noise) ||
@@ -509,7 +815,9 @@ static void point_task(command_manager_t *m)
         int64_t error=(int64_t)m->point_target[i]-motor->status.position;
         int64_t distance=error<0 ? -error : error;
         /* About 0.036 output degrees with PA11=10000 and a 50:1 gearbox. */
-        uint32_t tolerance=ppr/200U+1U;
+        uint32_t brake_tolerance=ppr/200U+1U;
+        uint32_t tolerance=m->point_tolerance[i] ? m->point_tolerance[i] : brake_tolerance;
+        if (brake_tolerance>tolerance) brake_tolerance=tolerance;
         int16_t desired=0;
         if (distance<=tolerance) m->point_settling[i]=1U;
         if (m->point_settling[i]) {
@@ -529,7 +837,10 @@ static void point_task(command_manager_t *m)
             uint32_t reaction=(HAL_GetTick()-previous_sample)*2U+20U;
             if (reaction<100U) reaction=100U;
             if (reaction>1000U) reaction=1000U;
-            uint16_t speed=AxisMotion_PointSpeed((uint64_t)distance,tolerance,ppr,
+            /* Finish tolerance is independently configurable. Do not subtract
+               the larger business window from braking distance, which would
+               retain the same slow crawl outside that enlarged window. */
+            uint16_t speed=AxisMotion_PointSpeed((uint64_t)distance,brake_tolerance,ppr,
                 (uint16_t)m->point_max_rpm[i],m->point_decel_ms[i],m->point_s_curve_ms[i],reaction);
             desired=(int16_t)(error<0 ? -speed : speed);
             if (HAL_GetTick()-m->point_progress_at[i]>3000U) { point_fault(m,i,GUARD_EXECUTION);continue; }
@@ -555,12 +866,17 @@ static void point_task(command_manager_t *m)
             desired=(int16_t)(desired<0 ? -speed : speed);
         }
         if (desired!=m->point_sent_rpm[i]) {
+            /* Keep setpoint readback: a drive echo alone need not prove its
+               effective setpoint changed, especially on braking commands. */
             r=write_pa_temp_verified(motor,P100S_PA_INTERNAL_SPEED_1,(uint16_t)desired);
             if (r!=MODBUS_OK) { point_fault(m,i,GUARD_COMM);continue; }
             m->point_sent_rpm[i]=desired;
             m->point_last[i]=motor->status.position;
         }
-        m->point_poll_at[i]=HAL_GetTick()+(m->point_settling[i] ? 20U : 50U);
+        /* Deadline from cycle start: bus work no longer adds a fixed 50 ms.
+           No catch-up loop if the bus overruns; execute once on the next turn. */
+        m->point_poll_at[i]=cycle_started+(m->point_settling[i] ? 20U : 50U);
+        m->point_cycle_ms[i]=HAL_GetTick()-cycle_started;
     }
     m->busy=0U;
 }
@@ -715,7 +1031,28 @@ void Command_Process(void *context, const pc_command_packet_t *c)
           (!c->parameter || c->parameter==m->trajectory.session))))
         Trajectory_Cancel(m,TJ_USER_STOP);
     /* Prioritize a latched trip ahead of every incoming PC packet. */
+    m->point_preflight=(uint8_t)((c->command==PC_CMD_MOVE_AXES_POINT || c->command==PC_CMD_BANK_RUN) &&
+        !m->point_active[0] && !m->point_active[1] && !Trajectory_Active(&m->trajectory));
+    for (unsigned i=0;i<2U;++i) {
+        axis_guard_t *g=&m->guard[i];
+        if (m->continuous_active[i] || m->continuous_stop_pending[i] || m->position_watch[i] ||
+            g->dual_home || g->dual_pending || g->stop_pending ||
+            (g->phase>=HOME_SEEK && g->phase<=HOME_FINAL_STOP)) m->point_preflight=0U;
+    }
     Command_Manager_Task(m);
+    m->point_preflight=0U;
+    if (c->command>=PC_CMD_BANK_BEGIN && c->command<=PC_CMD_BANK_STATUS) {bank_command(m,c);return;}
+    if (c->command==PC_CMD_POINT_TIMING) {
+        uint8_t data[32];
+        for (unsigned i=0;i<2U;++i) {
+            put_i32(data+16U*i,(int32_t)m->point_init_ms[i]);
+            put_i32(data+16U*i+4U,(int32_t)m->point_cycle_ms[i]);
+            put_i32(data+16U*i+8U,(int32_t)m->point_gap_ms[i]);
+            put_i32(data+16U*i+12U,(int32_t)m->point_max_gap_ms[i]);
+        }
+        (void)PC_Comm_SendResponseData(c->device_id,c->command,PC_STATUS_SUCCESS,c->parameter,data,sizeof(data));return;
+    }
+    if (c->command==PC_CMD_MOVE_AXES_POINT) { axes_point(m,c,c);return; }
     uint8_t index = (uint8_t)(c->device_id - 1U);
     if ((m->point_active[0] || m->point_active[1]) &&
         c->command>=PC_CMD_TRAJECTORY_BEGIN && c->command<=PC_CMD_TRAJECTORY_START) {
@@ -764,6 +1101,8 @@ void Command_Process(void *context, const pc_command_packet_t *c)
         (void)PC_Comm_SendResponse(c->device_id,c->command,PC_STATUS_BUSY,c->parameter,0);return;
     }
     if (c->command>=PC_CMD_READ_FEEDBACK && c->command<=PC_CMD_HOME_DUAL_LIMIT) {
+        if (c->command!=PC_CMD_READ_FEEDBACK && c->command!=PC_CMD_READ_GUARD && c->command!=PC_CMD_READ_DUAL_LIMIT)
+            for (unsigned n=0;n<POINT_BANK_SLOTS;++n) m->point_banks[n].ready=0U;
         m->busy=1;
         GuardController_Command(m,c);
         m->busy=0;
@@ -979,7 +1318,7 @@ void Command_Process(void *context, const pc_command_packet_t *c)
             if (m->guard[index].angle_sign<0 && motion.motor_pulses==INT32_MIN) result=MODBUS_ERROR_ARGUMENT;
             else if (c->command==PC_CMD_MOVE_OUTPUT_TRACKED)
                 result=start_point(m,index,motion.motor_speed_rpm,
-                    m->guard[index].angle_sign<0 ? -motion.motor_pulses : motion.motor_pulses);
+                    m->guard[index].angle_sign<0 ? -motion.motor_pulses : motion.motor_pulses,0U,NULL);
             else result = move_position(m, index, motor, 0U, motion.motor_speed_rpm,
                                    m->guard[index].angle_sign<0 ? -motion.motor_pulses : motion.motor_pulses, &ignored_motor_position);
         }

@@ -1,4 +1,5 @@
 import struct
+from dataclasses import replace
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -21,8 +22,14 @@ class SettleFeedbackTests(unittest.TestCase):
         self.c.get_axis_positions=Mock(return_value=poses())
         result=self.c.wait_for_axes((0,1))
         self.assertEqual(len(result),2)
-        self.c.get_axis_positions.assert_called_once_with(fresh=True)
+        self.c.get_axis_positions.assert_called_once_with(fresh=False)
         self.c.stop.assert_not_called()
+
+    def test_business_default_accepts_point_two_zero_proof_inside_point_two_degrees(self):
+        within=tuple(replace(p,angle_deg=p.angle_deg+.18) for p in poses())
+        self.c.get_axis_positions=Mock(return_value=within)
+        self.assertIs(self.c.wait_for_axes((0,1)),within)
+        self.c.get_axis_positions.assert_called_once_with(fresh=False)
 
     def test_zero_speed_during_active_task_is_not_completion(self):
         self.c.get_axis_positions=Mock(side_effect=[poses(0x21),poses(1),poses(1)])

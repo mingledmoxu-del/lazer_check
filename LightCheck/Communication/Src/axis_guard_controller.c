@@ -80,6 +80,21 @@ static uint8_t blocked_direction(command_manager_t *m, unsigned i, int32_t direc
         (!g->confirmed || !g->home_at_end || direction*g->home_direction>0)) return 1;
     return 0;
 }
+/* Same bounded point checks, using a pose/units sample verified by this command.
+   No cached state is accepted across commands through this interface. */
+pc_status_t GuardController_PointAllowed(command_manager_t *m,uint8_t i,int32_t angle,int32_t delta)
+{
+    axis_guard_t *g=&m->guard[i];
+    if (g->stop_pending || homing(g) || g->dual_pending || g->dual_home) return PC_STATUS_BUSY;
+    if (g->fault) return PC_STATUS_LIMIT_ACTIVE;
+    if (!g->zero_valid) return PC_STATUS_NOT_REFERENCED;
+    if (g->dual_enabled && ((delta<0 && AxisGuard_Active(&m->guard_inputs,g,g->dual_channel[0])) ||
+        (delta>0 && AxisGuard_Active(&m->guard_inputs,g,g->dual_channel[1])))) return PC_STATUS_LIMIT_ACTIVE;
+    if (blocked_direction(m,i,delta)) return PC_STATUS_LIMIT_ACTIVE;
+    if (!AxisGuard_TargetAllowed(g,angle,delta)) return PC_STATUS_RANGE;
+    if (g->phase==HOME_DONE || g->phase==HOME_FAULT) g->phase=HOME_IDLE;
+    return PC_STATUS_SUCCESS;
+}
 pc_status_t GuardController_Preflight(command_manager_t *m, const pc_command_packet_t *c)
 {
     unsigned i=c->device_id-1U;
@@ -300,6 +315,16 @@ void GuardController_Task(command_manager_t *m)
             }
             continue;
         }
+        /* The active point loop reads alarm/encoder, validates units at least
+           every 100 ms and applies this same soft-range check before writing
+           velocity. Hardware/dual edges and pending stops above still run on
+           every task call. Avoid a second independent bus poll of the same axis. */
+        if (m->point_active[i] || (m->point_completed[i] && m->point_sample_valid[i] &&
+            HAL_GetTick()-m->point_sample_at[i]<=100U && HAL_GetTick()-m->point_units_at[i]<=100U)) continue;
+        /* The immediately following joint command reads this idle axis's
+           actual status/units and checks current + target soft range. Edges,
+           homing and pending stops above are never deferred. */
+        if (m->point_preflight && !homing(g)) continue;
         if ((!g->soft_on && !homing(g)) || (int32_t)(HAL_GetTick()-g->poll_at)<0) continue;
         if (g->soft_on && !g->zero_valid && !homing(g)) continue; /* Fault is latched; await explicit re-reference. */
         g->poll_at=HAL_GetTick()+100U;

@@ -118,6 +118,10 @@ class DebugPanel:
 
     def ready(self,axis):
         a=self.app
+        joint=getattr(a,"joint_timing_panel",None)
+        if joint and joint.phase:
+            messagebox.showwarning("联动计时中","请先停止两轴联动计时。",parent=self.window)
+            return False
         self.release_idle_owner(axis)
         # Post-homing readbacks must not block the next operator action.
         if self.jobs and all(frame[4] in (CMD_READ_GUARD,CMD_READ_DUAL_LIMIT,CMD_READ_FEEDBACK) for frame,_ in self.jobs):

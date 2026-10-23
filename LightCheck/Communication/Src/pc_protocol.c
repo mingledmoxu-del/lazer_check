@@ -60,6 +60,15 @@ static void parse(pc_protocol_t *p)
             c.data_length = (uint8_t)data_len;
             if (data_len <= PC_PROTOCOL_MAX_DATA) memcpy(c.data, p->buffer + 7U, data_len);
             switch (c.command) {
+            case PC_CMD_BANK_BEGIN: c.valid_payload=(uint8_t)(c.device_id==1U && c.parameter>=1U && c.parameter<=4U && data_len==9U);break;
+            case PC_CMD_BANK_POINT: c.valid_payload=(uint8_t)(c.device_id==1U && c.parameter>=1U && c.parameter<=4U && data_len==13U);break;
+            case PC_CMD_BANK_SEAL: c.valid_payload=(uint8_t)(c.device_id==1U && c.parameter>=1U && c.parameter<=4U && data_len==4U);break;
+            case PC_CMD_BANK_RUN: c.valid_payload=(uint8_t)(c.device_id==1U && c.parameter>=1U && c.parameter<=4U && data_len==5U);break;
+            case PC_CMD_BANK_STATUS: c.valid_payload=(uint8_t)(c.device_id==1U && c.parameter>=1U && c.parameter<=4U && data_len==0U);break;
+            case PC_CMD_POINT_TIMING:
+                c.valid_payload=(uint8_t)(data_len==0U && c.parameter==PC_POINT_TIMING_KEY && c.device_id==1U);break;
+            case PC_CMD_MOVE_AXES_POINT:
+                c.valid_payload=(uint8_t)((data_len==10U || data_len==12U) && c.parameter==PC_AXES_POINT_KEY && c.device_id==1U);break;
             case PC_CMD_TRAJECTORY_BEGIN: c.valid_payload=(uint8_t)(data_len==20U); break;
             case PC_CMD_TRAJECTORY_POINT: c.valid_payload=(uint8_t)(data_len==14U); break;
             case PC_CMD_TRAJECTORY_SEAL:

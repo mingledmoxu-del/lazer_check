@@ -19,7 +19,7 @@ class MotionTiming:
         now=self.clock()
         row=dict(timestamp=datetime.datetime.now().astimezone().isoformat(timespec='milliseconds'),
                  trace_id=trace['id'],axis=axis,operation=trace['operation'],event=event,
-                 elapsed_ms=round((now-trace['call'])*1000,3),**detail)
+                 elapsed_ms=round((now-trace['call'])*1000,3),finish_tolerance_deg=trace.get('finish_tolerance_deg'),**detail)
         for phase in ('sent','ack'):
             if phase in trace:row[f'from_{phase}_ms']=round((now-trace[phase])*1000,3)
         if 'sent' in trace:row['call_to_send_ms']=round((trace['sent']-trace['call'])*1000,3)
@@ -39,15 +39,30 @@ class MotionTiming:
             try:self.emit(row)
             except Exception:logging.getLogger(__name__).warning('Motion timing callback failed',exc_info=True)
 
-    def begin(self, axis, operation, target=None):
+    def begin(self, axis, operation, target=None, *, finish_tolerance_deg=None):
         if axis in self.axes:self.finish(axis,'replaced')
         self.sequence+=1
         self.axes[axis]=dict(id=f'{time.time_ns()}-{self.sequence}',operation=operation,
-                             call=self.clock(),target=target,seen=set())
+                             call=self.clock(),target=target,finish_tolerance_deg=finish_tolerance_deg,seen=set())
         self._event(axis,'call_start',target_deg=target)
 
     def sent(self, frame):
         axis,command=frame[3:5]
+        if command in (0x1A,0x43):
+            if command==0x1A:
+                speed,first,second=struct.unpack('>Hii',frame[7:17]);targets=(first/1000,second/1000)
+            else:
+                speed=None;targets=tuple(self.axes.get(i,{}).get('target') for i in (1,2))
+            for index,target in enumerate(targets,1):
+                trace=self.axes.get(index)
+                if trace is None or 'sent' in trace:self.begin(index,'move_axes_to' if command==0x1A else 'run_preloaded_point',target)
+            sent_at=self.clock()
+            for index,target in enumerate(targets,1):
+                trace=self.axes[index];trace['sent']=sent_at;trace['command']=command
+                if command==0x1A and len(frame)>=21:trace['finish_tolerance_deg']=struct.unpack('>H',frame[17:19])[0]/1000
+                trace['target']=target;trace['baseline']=self.last_counts.get(index)
+                self._event(index,'motion_sent',command=f'0x{command:02X}',target_deg=target,speed_rpm=speed/100 if speed is not None else None)
+            return
         if command in (0x19,0x14,0x28,0x23,0x17):
             trace=self.axes.get(axis)
             if trace is None or 'sent' in trace:
@@ -70,6 +85,15 @@ class MotionTiming:
 
     def received(self, packet):
         axis,command=packet.device_id,packet.command
+        if command in (0x1A,0x43):
+            received_at=self.clock()
+            for index in (1,2):
+                trace=self.axes.get(index)
+                if trace and trace.get('command')==command:
+                    if not packet.ok:self.finish(index,'rejected',command=command,status=packet.status)
+                    elif 'ack' not in trace:
+                        trace['ack']=received_at;self._event(index,'motion_ack',board_prepare_ms=list(struct.unpack('>II',packet.data)) if len(packet.data)==8 else None)
+            return
         trace=self.axes.get(axis)
         if not packet.ok:
             if trace and command in (6,0x19,0x14,0x28,0x23,0x17,0x20,0x37):

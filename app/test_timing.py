@@ -7,11 +7,22 @@ from unittest.mock import Mock
 
 from app.timing import MotionTiming
 from app.protocol import Response, build_move_output_relative, build_request, CMD_STOP
+from app.protocol import build_move_axes_point
 from app import MotorController
 from app.test_motor_controller import FakeSerial
 
 
 class MotionTimingTests(unittest.TestCase):
+    def test_two_axis_packet_uses_shared_timestamps_with_slow_callback(self):
+        now=[0.0]
+        def slow_emit(row):now[0]+=.05
+        t=MotionTiming(emit=slow_emit,clock=lambda:now[0])
+        t.sent(build_move_axes_point((10,10),1,tolerance_deg=.2))
+        self.assertEqual(t.axes[1]['sent'],t.axes[2]['sent'])
+        now[0]=1
+        t.received(Response(1,0x1A,0,0x4A50,struct.pack('>II',54,54),b''))
+        self.assertEqual(t.axes[1]['ack'],t.axes[2]['ack'])
+
     def test_monotonic_phase_durations_and_single_completion(self):
         now=[0.0];rows=[];t=MotionTiming(emit=rows.append,clock=lambda:now[0])
         t.begin(1,'test',10)

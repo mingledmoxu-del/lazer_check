@@ -19,6 +19,7 @@ typedef struct p100s_status_s {
     uint16_t input_state;
     uint16_t output_state;
     uint16_t alarm_code;
+    uint16_t control_mode; /* Live 0x1009, sampled in the same status transaction. */
 } p100s_status_t;
 
 typedef struct p100s_handle_s {

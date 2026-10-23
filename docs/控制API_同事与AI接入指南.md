@@ -1,6 +1,14 @@
 # 双电机控制 API：同事与 AI 接入指南
 
-适用版本：**上位机 / Python SDK v3.8.8，配套 H743 固件 v3.8.7**。v3.8.8只增加主机耗时日志，已有v3.8.7固件无需重烧。本文是当前调用约定，优先于历史 v3.x 文档。F407 工程是备用方案，未同步本次功能。
+适用版本：**上位机 / Python SDK / H743 固件 v3.9.3，需同步更新并重烧固件**。本文是当前调用约定，优先于历史 v3.x 文档。F407 工程是备用方案，未同步本次功能。
+
+v3.9.3：定位准备合并为每轴两个当前参数块，减少重复空闲保护读取；GUI日志批量显示，修复同包两轴计时偏差和CSV只有表头。API及真实输出轴rpm/±0.2°语义不变；SDK `timing_callback` 仍同步，重IO/UI处理请自行入队。不要在组合等待接口返回后再重复停止/核验。[更新与复测口径](v3.9.3_缩短应答准备与日志阻塞.md)。
+
+v3.9.2：GUI联动/预载页直接填写真实输出轴rpm（0.01～100，默认0.1），取消旧1.5限制及÷6；SDK双轴与预载API速度语义保持真实rpm。应答前常规核验减少两轴合计4次RS485读取；GUI/CSV新增board_prep、ack_other并记录JOINT_ACK_TIMING。复位/寻限位接口不改单位；1秒完成目标需要实测，接受应答不是运动完成。详见[v3.9.2速度、计时与集成说明](v3.9.2_实际rpm与应答分段计时.md)。
+
+v3.9.1：支持4套RAM预载点库、每库16点，先上传不运动，再按编号逐点触发；新双轴/预载默认终点容差±0.2°（用户确认），两次实际零速及直接完成核验保留。推荐同事调用 `preload_route(..., tolerance_deg=0.2)` 一次，再按业务事件调用 `move_preloaded_point_and_wait(route_id, point_index)`，复用返回的 `positions` 完成快照，不再追加同轮停止/全量核验。组合接口返回 `accepted_ms/wait_ms/elapsed_ms`，预载返回独立 `upload_elapsed_ms`。详见[v3.9.1接口、协议、完整示例与耗时口径](v3.9.1_预载点位与0.2度完成容差.md)。RAM复位失效，重建参考需重新预载；速度是真实输出轴rpm。
+
+v3.9.0新增 `move_axes_to((角度1,角度2), speed_rpm=实际输出轴rpm)`：单包提交两轴绝对目标，两轴有参考且停稳时使用；无需调用端再逐轴停止/预检。`wait_for_axes()`运动中复用有年龄标记的控制反馈，完成时仍要求直接位置/零速证据。`get_point_timing()`读取两轴最近一次初始化/控制周期耗时，单位ms。旧单轴API保留；新双轴命令在旧固件会被拒绝，不自动降级重发。详见[v3.9.0更新、协议与示例](v3.9.0_降低定位通信与停稳额外耗时.md)。GUI主窗口「两轴联动往返计时」使用新接口，可在完成后「读取板端耗时」。
 
 v3.8.8耗时日志：SDK构造函数新增可选`timing_log="logs/motion_timing.jsonl"`及`timing_callback=callback`；不配置时仍可通过Python日志器`motor.motion_timing`的INFO级别接收。GUI自动写`app/logs/motion_timing.jsonl`，并显示TIMING记录。每条记录含trace_id、axis、事件、带时区时间戳、单调时钟elapsed_ms；包含调用准备、停止确认、实际发送、通信应答、首次观察到运动、进入±0.5°、板端完成及取消/失败。`completed.from_sent_ms`为发送到主机得知完成的总时长，`tx_ack_ms`为发送到应答，`from_motion_observed_ms`为首次观察到运动后时长，`from_angle_window_ms`为进入窗口后时长。它们不是硬件精确起止时刻：反馈采样/传输会造成观测延迟，日志保留采样年龄和来源，不新增轮询。未读取反馈就无法知道运动何时完成。详见[v3.8.8日志说明](v3.8.8_指令阶段耗时日志.md)。
 
@@ -12,9 +20,8 @@ v3.8.7针对快速移动冲击及末段确认：启动时约200ms分段增加速
 
 ```python
 # 已建立两轴参考；速度仍是真实输出轴rpm，按现场需求设置。
-controller.move_to_angle(1, 10, speed_rpm=0.2)
-controller.move_to_angle(2, 5, speed_rpm=0.2)
-positions = controller.wait_for_axes((10, 5), tolerance_deg=0.1)
+controller.move_axes_to((10, 5), speed_rpm=0.2)
+positions = controller.wait_for_axes((10, 5), tolerance_deg=0.2)
 # positions 已核验位置、实际零速、报警、参考与任务状态，无需重复同一轮查询。
 ```
 
@@ -179,3 +186,6 @@ payload = asdict(controller.get_feedback(1))
 源码：`app/motor_controller.py`（SDK），`app/protocol.py`（帧），`app/debug_panel.py` / `business_panel.py`（GUI），`LightCheck/Communication/Src/axis_guard_controller.c`（板端限位状态机）。普通同事调用SDK即可，无需自行构造TCP帧或直接写P100S参数。
 
 验证：173项Python测试、10组C测试、H743网口Debug编译及GUI测试；覆盖速度边界换算、参考保留、两种电机2操作、非法参数、等待到位、旧反馈不清新动作、忙状态释放。硬件高速动作尚未现场验收。
+# 上位机 v3.8.9 补充：两轴联动计时
+
+SDK仍为v3.8.8，固件仍为v3.8.7。GUI新增两轴目标表顺序执行与计时导出，详见[v3.8.9操作说明](v3.8.9_两轴联动往返计时.md)。每行两轴均完成才进入下一行；0x19逐轴下发，非硬件同步启动。此调试功能不改线协议及现有SDK API。

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from .timing import MotionTiming
 import math
+import secrets
 import struct
 import threading
 import time
@@ -23,6 +24,7 @@ from .protocol import (
     CMD_TRAJECTORY_STOP, CMD_TRAJECTORY_KEEPALIVE, build_trajectory_begin, build_trajectory_point,
     CMD_READ_AXES, CMD_TRAJECTORY_CLEAR, CMD_SET_REFERENCE, build_set_reference,
     CMD_READ_DUAL_LIMIT, build_dual_limits, build_dual_home,
+    build_move_axes_point,
 )
 from .trajectory import (TrajectoryPoint, TrajectoryStatus, decode_status, validate_points,
                          decode_axes, return_to_start_points, business_trajectory)
@@ -166,6 +168,7 @@ class MotorController:
         self._auto_thread: threading.Thread | None = None
         self._stop_versions={1:0,2:0}
         self._timing=MotionTiming(timing_log,timing_callback)
+        self._preloaded_routes={}
 
     @staticmethod
     def _axis(motor_id: int) -> None:
@@ -787,7 +790,90 @@ class MotorController:
         self.stop(motor_id)
         raise MotorError("定位等待超时，已请求停止；未重发运动或清除参考")
 
-    def wait_for_axes(self, targets_deg, *, tolerance_deg: float = 0.1, timeout_s: float = 120):
+    def get_point_timing(self):
+        """v3.9.0板端最近点位的初始化/控制工作/周期/最大周期耗时，单位ms。"""
+        packet=self._request(build_request(1,0x1B,parameter=0x544D))
+        if len(packet.data)!=32:raise MotorError('板端计时应答长度错误')
+        names=('init_ms','cycle_work_ms','cycle_period_ms','max_cycle_period_ms')
+        return tuple(dict(zip(names,struct.unpack_from('>IIII',packet.data,16*i))) for i in (0,1))
+
+    def preload_route(self, points, *, route_id: int = 1, speed_rpm: float = .1, tolerance_deg: float = .2, token=None):
+        """v3.9.1：预载1～16个两轴绝对点；不启动，速度为真实输出轴rpm。
+
+        板端有4个RAM库，覆盖同编号库需新令牌；封存要求两轴有参考且停稳。
+        """
+        from .point_bank import upload_frames,decode_route
+        points=tuple(tuple(p) for p in points)
+        token=(secrets.randbits(32) or 1) if token is None else token
+        frames=upload_frames(points,slot=route_id,token=token,speed_rpm=speed_rpm,tolerance_deg=tolerance_deg)
+        self._preloaded_routes.pop(route_id,None)
+        with self._lock:
+            began=time.monotonic()
+            for frame in frames:
+                packet=self._request(frame)
+                try:status=decode_route(packet.data)
+                except ValueError as exc:raise MotorError(str(exc)) from exc
+                if status['token']!=token or status['count']!=len(points):raise MotorError('预载状态与本次请求不符')
+            if not status['ready'] or status['loaded']!=len(points):raise MotorError('预载未封存就绪；未启动运动')
+            result=dict(route_id=route_id,points=points,upload_elapsed_ms=round((time.monotonic()-began)*1000,3),**status)
+            self._preloaded_routes[route_id]=result
+            return result
+
+    def get_preloaded_route(self, route_id: int = 1):
+        from .point_bank import route_status,decode_route
+        packet=self._request(route_status(route_id))
+        try:return dict(route_id=route_id,**decode_route(packet.data))
+        except ValueError as exc:raise MotorError(str(exc)) from exc
+
+    def run_preloaded_point(self, route_id: int, point_index: int, *, token=None):
+        """只运行一个预载点；完成后等下一条指令，不自动顺序运行。"""
+        from .point_bank import run_route_point
+        record=self._preloaded_routes.get(route_id)
+        if token is None:
+            if record is None:raise MotorError('本连接尚无该预载库令牌，请预载或显式提供token')
+            token=record['token']
+        frame=run_route_point(route_id,token,point_index)
+        target=record['points'][point_index] if record and token==record['token'] and point_index<len(record['points']) else (None,None)
+        for axis,angle in enumerate(target,1):self._timing.begin(axis,'run_preloaded_point',angle,finish_tolerance_deg=record['tolerance_deg'] if record else None)
+        try:
+            packet=self._request(frame)
+            if len(packet.data)!=8:raise MotorError('预载定位应答长度错误，执行状态未知')
+            return dict(route_id=route_id,point_index=point_index,targets_deg=target,tolerance_deg=record['tolerance_deg'] if record and record['token']==token else None,board_prepare_ms=struct.unpack('>II',packet.data))
+        except MotorError:
+            self._timing.finish_all('preloaded_command_failed');self._request_pair_stop();raise
+
+    def move_preloaded_point_and_wait(self, route_id: int, point_index: int, *, timeout_s: float = 120):
+        """单点事件调用：执行、等待并返回可信完成快照，无固定到位后延时。"""
+        self._action_timeout(timeout_s)
+        record=self._preloaded_routes.get(route_id)
+        if record is None or not isinstance(point_index,int) or not 0<=point_index<len(record['points']):
+            raise MotorError('需要本SDK已预载的有效点编号')
+        began=time.monotonic()
+        accepted=self.run_preloaded_point(route_id,point_index)
+        acknowledged=time.monotonic()
+        positions=self.wait_for_axes(record['points'][point_index],tolerance_deg=record['tolerance_deg'],timeout_s=timeout_s)
+        finished=time.monotonic()
+        return dict(accepted,completed=True,positions=positions,tolerance_deg=record['tolerance_deg'],
+                    accepted_ms=round((acknowledged-began)*1000,3),wait_ms=round((finished-acknowledged)*1000,3),elapsed_ms=round((finished-began)*1000,3))
+
+    def move_axes_to(self, targets_deg, *, speed_rpm: float = 0.1, tolerance_deg: float = .2):
+        """v3.9.0固件：一次提交两轴绝对目标；实际输出轴rpm，无÷6。
+
+        必须已有两轴参考且停稳；不自动复位、清故障或降级重发。
+        返回板端两轴各自准备耗时（ms），ACK不代表运动完成。
+        """
+        frame=build_move_axes_point(targets_deg,speed_rpm,tolerance_deg=tolerance_deg)
+        for axis,target in enumerate(targets_deg,1):self._timing.begin(axis,'move_axes_to',target,finish_tolerance_deg=tolerance_deg)
+        try:
+            packet=self._request(frame)
+            if len(packet.data)!=8:raise MotorError('联动应答长度错误，执行状态未知')
+            return dict(board_prepare_ms=struct.unpack('>II',packet.data),targets_deg=tuple(targets_deg),tolerance_deg=tolerance_deg)
+        except MotorError:
+            self._timing.finish_all('joint_command_failed')
+            self._request_pair_stop()
+            raise
+
+    def wait_for_axes(self, targets_deg, *, tolerance_deg: float = 0.2, timeout_s: float = 120):
         """v3.8.7：单个请求实读两轴并核验位置、零速、报警及任务完成。
 
         不发运动；新固件已确认完成时直接使用该证据，否则要求两轮直接反馈。
@@ -796,10 +882,10 @@ class MotorController:
         if len(targets_deg)!=2 or not all(math.isfinite(x) for x in targets_deg):
             raise ValueError("targets_deg 须包含两轴有限目标角度")
         if not math.isfinite(tolerance_deg) or tolerance_deg<=0:raise ValueError("容差须为有限正数")
-        deadline=time.monotonic()+timeout_s;zeros=0;versions=dict(self._stop_versions)
+        deadline=time.monotonic()+timeout_s;zeros=0;versions=dict(self._stop_versions);fresh=False
         while time.monotonic()<deadline:
             if versions!=self._stop_versions:raise MotorError("两轴到位等待已被停止操作取消")
-            try:poses=self.get_axis_positions(fresh=True)
+            try:poses=self.get_axis_positions(fresh=fresh)
             except MotorError:
                 self._request_pair_stop()
                 raise
@@ -810,6 +896,8 @@ class MotorController:
                         p.motor_rpm==0 and not p.flags&0x30 for p,target in zip(poses,targets_deg))
             zeros=zeros+1 if reached else 0
             if reached and (all(p.flags&0x40 for p in poses) or zeros>=2):return poses
+            fresh=all(p.motor_rpm==0 and not p.flags&0x30 and abs(p.angle_deg-target)<=tolerance_deg
+                      for p,target in zip(poses,targets_deg))
             time.sleep(0.02 if reached else 0.05)
         self._request_pair_stop()
         raise MotorError("两轴到位等待超时；已请求停止，未重发运动")
@@ -818,7 +906,10 @@ class MotorController:
         # One offline axis must not prevent attempting the other stop. Failure
         # remains uncertain; the original feedback error is preserved.
         for axis in (1,2):
-            try:self.stop(axis,wait=False)
+            try:
+                if self._faulted and self._port is not None:
+                    with self._lock:self._port.write(build_request(axis,CMD_STOP))
+                else:self.stop(axis,wait=False)
             except MotorError:pass
 
     def reset_axis1(self, *, speed_rpm: float = 0.6, timeout_s: float = 120) -> PositionFeedback:

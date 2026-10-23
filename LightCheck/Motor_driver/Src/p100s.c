@@ -42,6 +42,7 @@ modbus_result_t p100s_read_status(p100s_handle_t *motor) {
         motor->status.position         = p100s_decode_position(&values[1]);
         motor->status.command_position = p100s_decode_position(&values[3]);
         motor->status.position_error   = p100s_decode_position(&values[5]);
+        motor->status.control_mode     = values[9];
         motor->status.input_state      = values[15];
         motor->status.output_state     = values[16];
         motor->status.alarm_code       = values[19];

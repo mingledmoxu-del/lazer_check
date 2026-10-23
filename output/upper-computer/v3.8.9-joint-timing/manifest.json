@@ -1,0 +1,13 @@
+{
+  "gui_version": "3.8.9",
+  "sdk_version": "3.8.8",
+  "firmware_version": "3.8.7",
+  "firmware_changed": false,
+  "python_tests": 197,
+  "gui_checked": true,
+  "hardware_tested": false,
+  "files": {
+    "README.md": "8952aed38209cf2e0731774086a7863ee72931df352bf57445252090cb227632",
+    "upper-computer-sdk-source.zip": "b81d435c2eb8e5da546271978e0b8f14cd6a490524291c75e281937756279354"
+  }
+}

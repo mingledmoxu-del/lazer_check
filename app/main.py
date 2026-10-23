@@ -54,9 +54,11 @@ class SimpleServoApp:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
+        self._log_queue=[]
+        self._log_after=None
         self._timing=MotionTiming(Path(__file__).parent/'logs'/'motion_timing.jsonl',
             lambda row:self._log('TIMING '+json.dumps(row,ensure_ascii=False)))
-        self.root.title("P100S 电机控制 v3.8.8 · 主网口TCP / 指令耗时日志")
+        self.root.title("P100S 电机控制 v3.9.3 · 主网口TCP / 参数块读取与联动计时")
         self.root.geometry("1000x900")
         self.root.minsize(960, 740)
 
@@ -91,6 +93,7 @@ class SimpleServoApp:
         self.trajectory_running = False
         self.trajectory_panel = None
         self.business_panel = None
+        self.joint_timing_panel = None
 
         self.port_name = tk.StringVar()
         self.connection_mode=tk.StringVar(value="TCP网口")
@@ -144,6 +147,7 @@ class SimpleServoApp:
 
         from business_panel import BusinessPanel
         self.business_panel=BusinessPanel(self,outer)
+        ttk.Button(outer,text="两轴联动计时 / 预载固定点位",command=self._open_joint_timing).pack(anchor="w",pady=4)
         self.advanced_open=tk.BooleanVar(value=False)
         ttk.Checkbutton(outer,text="展开运动与参数调试",variable=self.advanced_open,
                         command=self._toggle_advanced).pack(anchor="w")
@@ -236,6 +240,14 @@ class SimpleServoApp:
         self.log.pack(fill="both", expand=True, pady=(10, 0))
         self._log("界面速度和角度均指减速器输出轴；软件停止不能代替硬件急停。")
         control.pack_forget()
+
+    def _open_joint_timing(self):
+        if self.joint_timing_panel is None:
+            from joint_timing_panel import JointTimingPanel
+            self.joint_timing_panel=JointTimingPanel(self)
+        else:
+            self.joint_timing_panel.window.deiconify()
+            self.joint_timing_panel.window.lift()
 
     def _open_axis1_homing(self):
         self._open_debug()
@@ -417,6 +429,7 @@ class SimpleServoApp:
         self._show_limit_mode()
 
     def _disconnect(self) -> None:
+        if getattr(self,"joint_timing_panel",None):self.joint_timing_panel.disconnected()
         if getattr(self,'_timing',None):self._timing.finish_all('connection_closed',execution_state='unknown_if_unfinished')
         # Preserve active_motor until the existing disconnect stop has been sent.
         business=getattr(self,"business_panel",None)
@@ -552,6 +565,10 @@ class SimpleServoApp:
                    f"{motion.motor_speed_rpm} rpm；STM32按50:1换算")
 
     def _stop(self) -> None:
+        joint=getattr(self,"joint_timing_panel",None)
+        if joint and joint.phase:
+            joint.stop()
+            return
         self.motion_generation=getattr(self,"motion_generation",0)+1
         self.stop_zero_samples=0
         business=getattr(self,"business_panel",None)
@@ -755,7 +772,12 @@ class SimpleServoApp:
             self._send(frame,command,description)
 
     def _send(self, frame: bytes, command: int, description: str, allow_override: bool = False,
-              *, background: bool = False, preparation_step: bool = False) -> bool:
+              *, background: bool = False, preparation_step: bool = False, timing_step: bool = False) -> bool:
+        joint=getattr(self,"joint_timing_panel",None)
+        if joint and joint.phase and not timing_step:
+            if command==CMD_STOP:joint.stop()
+            elif not background:messagebox.showwarning("联动计时中","请先停止两轴联动计时，再执行其他操作。")
+            return False
         quick=getattr(getattr(self,"trajectory_panel",None),"quick_phase",None)
         preparation=getattr(getattr(self,"business_panel",None),"phase",None)
         if preparation and not preparation_step and command not in (0x06,0x37):
@@ -785,7 +807,7 @@ class SimpleServoApp:
             messagebox.showwarning("设备忙", "上一条命令仍在等待应答。")
             return False
         try:
-            if command in (CMD_MOVE_RELATIVE,CMD_MOVE_OUTPUT_RELATIVE):
+            if command in (CMD_MOVE_RELATIVE,CMD_MOVE_OUTPUT_RELATIVE,0x1A,0x43):
                 self.active_motor=frame[3]
                 self._lock_auto_axis(True)
             if getattr(self,'_timing',None):self._timing.sent(frame)
@@ -828,6 +850,7 @@ class SimpleServoApp:
                         self.diagnostic_active = False
                     self.result_text.set("通信超时：未收到 STM32 应答")
                     self._log(f"命令 0x{command:02X} 应答超时")
+                    if getattr(self,"joint_timing_panel",None):self.joint_timing_panel.stop("通信应答超时，取消后续段")
                     if getattr(self,"debug_panel",None): self.debug_panel.cancel()
                     if getattr(self,"trajectory_panel",None):self.trajectory_panel.on_error()
                     if getattr(self,"business_panel",None):self.business_panel.fail("通信超时，已取消准备；位置未知，请检查停机状态")
@@ -840,6 +863,11 @@ class SimpleServoApp:
                     self.queued_motion = None
                     self._show_limit_mode()
                 self._service_foreground()
+                joint=getattr(self,"joint_timing_panel",None)
+                if joint and joint.phase:
+                    joint.service()
+                    self.root.after(30, self._poll_serial)
+                    return
                 self._service_limit_debug()
                 self._service_auto()
                 if self.debug_panel is not None: self.debug_panel.service()
@@ -860,6 +888,8 @@ class SimpleServoApp:
         self.pending_background = False
         self.pending_parameter = None
         if getattr(self,'_timing',None):self._timing.received(packet)
+        joint=getattr(self,"joint_timing_panel",None)
+        if joint and joint.handle(packet):return
         if packet.ok and packet.command in (0x22,0x25) and getattr(self,"trajectory_panel",None):
             self.trajectory_panel.invalidate()
         if getattr(self,"business_panel",None) and self.business_panel.handle(packet):return
@@ -1044,8 +1074,21 @@ class SimpleServoApp:
 
     def _log(self, text: str) -> None:
         stamp = dt.datetime.now().strftime("%H:%M:%S")
+        self._log_queue.append(f"[{stamp}] {text}\n")
+        if self._log_after is None:
+            self._log_after=self.root.after(50,self._flush_log)
+
+    def _flush_log(self) -> None:
+        self._log_after=None
+        if not self._log_queue:return
+        text=''.join(self._log_queue)
+        self._log_queue.clear()
         self.log.configure(state="normal")
-        self.log.insert("end", f"[{stamp}] {text}\n")
+        self.log.insert("end",text)
+        # Bound Tk text layout work across long test sessions. Detailed motion
+        # events remain in motion_timing.jsonl, independent of this display.
+        lines=int(self.log.index('end-1c').split('.')[0])
+        if lines>2000:self.log.delete('1.0',f'{lines-2000+1}.0')
         self.log.see("end")
         self.log.configure(state="disabled")
 

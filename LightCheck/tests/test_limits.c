@@ -28,6 +28,11 @@ static uint8_t speed_on_delay;
 static uint8_t status_follows_setpoint;
 static unsigned status_read_count[2];
 static int16_t written_position_pulses[2];
+static unsigned range_reads,parameter_reads,speed_writes;
+static uint8_t range_not_supported;
+static uint8_t fail_second_armed;
+static unsigned wide_range_reads;
+static modbus_result_t fail_wide_range;
 
 uint32_t HAL_GetTick(void) { return now; }
 void HAL_Delay(uint32_t ms) {
@@ -37,13 +42,25 @@ void HAL_Delay(uint32_t ms) {
 modbus_result_t modbus_read_holding(modbus_handle_t *b, uint8_t id,
     uint16_t address, uint16_t count, uint16_t *value)
 {
-    (void)b; (void)count;
-    *value = address == 0x1009U ? current_mode[id - 1U] : 3U;
+    (void)b;
+    if (count>=32U) {
+        ++wide_range_reads;
+        if (fail_wide_range!=MODBUS_OK) return fail_wide_range;
+    }
+    if (count>1U) {++range_reads;if (range_not_supported) return MODBUS_ERROR_EXCEPTION;}
+    if (address==0x1009U && count==1U) *value=current_mode[id-1U];
+    else for (uint16_t n=0;n<count;++n) {
+        uint16_t reg=(uint16_t)(address+n);
+        p100s_parameter_group_t group=reg>=0x0200U ? P100S_GROUP_P4 : reg>=0x0100U ? P100S_GROUP_P3 : P100S_GROUP_PA;
+        modbus_result_t r=p100s_read_parameter(&motors[id-1U],group,(uint16_t)(reg-(uint16_t)group),value+n);
+        if (r!=MODBUS_OK) return r;
+    }
     return MODBUS_OK;
 }
 modbus_result_t p100s_read_parameter(p100s_handle_t *m, p100s_parameter_group_t group,
     uint16_t number, uint16_t *value)
 {
+    ++parameter_reads;
     *value = group == P100S_GROUP_P3 && number == 32U ? feedback_mode[m->slave_id - 1U] :
              group == P100S_GROUP_P4 && number<5U ? position_parameters[m->slave_id-1U][number] :
              group == P100S_GROUP_PA && number >= 22U && number <= 27U ? speed_parameters[m->slave_id - 1U][number - 22U] :
@@ -74,6 +91,7 @@ modbus_result_t p100s_write_parameter(p100s_handle_t *m, p100s_parameter_group_t
     }
     if (group == P100S_GROUP_P3 && number == 32U) feedback_mode[i]=value;
     if (group == P100S_GROUP_PA && number == 24U) {
+        ++speed_writes;
         if (fail_stop && value == 0U) return MODBUS_ERROR_TIMEOUT;
         last_speed[i] = (int16_t)value;
     }
@@ -106,6 +124,8 @@ modbus_result_t p100s_write_parameter(p100s_handle_t *m, p100s_parameter_group_t
 }
 modbus_result_t p100s_read_status(p100s_handle_t *m) {
     ++status_read_count[m->slave_id-1U];
+    m->status.control_mode=current_mode[m->slave_id-1U];
+    if (fail_second_armed && m->slave_id==2U && manager.point_active[0]) return MODBUS_ERROR_TIMEOUT;
     if (status_follows_setpoint) m->status.speed_raw=last_speed[m->slave_id-1U];
     return fail_reads ? MODBUS_ERROR_TIMEOUT : MODBUS_OK;
 }

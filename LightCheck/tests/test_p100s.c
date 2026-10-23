@@ -131,6 +131,7 @@ int main(void) {
     port.response[14] = 0xFF;
     port.response[15] = 0x7F;
     port.response[16] = 0xFF; /* INT32_MAX */
+    port.response[22] = 1; /* Live control mode, status word 9. */
     port.response[42] = 7;
     mock_seal(&port, 43);
     assert(p100s_read_status(&motor) == MODBUS_OK);
@@ -139,6 +140,7 @@ int main(void) {
     assert(motor.status.command_position == INT32_MIN);
     assert(motor.status.position_error == INT32_MAX);
     assert(motor.status.alarm_code == 7);
+    assert(motor.status.control_mode == 1);
     port.result = MODBUS_ERROR_TIMEOUT;
     assert(p100s_read_status(&motor) == MODBUS_ERROR_TIMEOUT);
     assert(!motor.status_valid && motor.status.position == -1);

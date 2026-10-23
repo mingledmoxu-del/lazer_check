@@ -19,6 +19,7 @@ CMD_READ_ALARM = 0x09
 CMD_RESET_ALARM = 0x0A
 CMD_MOVE_RELATIVE = 0x11
 CMD_MOVE_OUTPUT_RELATIVE = 0x19  # v3.8.5: feedback-tracked point task; old firmware rejects it.
+CMD_MOVE_AXES_POINT = 0x1A  # v3.9.0: prepare both absolute targets before either axis runs.
 CMD_SET_MOTION_PROFILE = 0x15
 CMD_LIMIT_DEBUG = 0x16
 CMD_ROTATE_CONTINUOUS = 0x17
@@ -250,6 +251,20 @@ def build_move_output_relative(device_id: int, output_speed_rpm: float, output_a
     if angle_millideg == 0 or not -(2**31) <= angle_millideg <= 2**31 - 1:
         raise ValueError("输出轴角度小于 0.001°或超出协议范围。")
     return build_request(device_id, CMD_MOVE_OUTPUT_RELATIVE, struct.pack(">Hi", speed_centi, angle_millideg), parameter=0x5054)
+
+
+def build_move_axes_point(targets_deg, speed_rpm: float, *, tolerance_deg=None) -> bytes:
+    if len(targets_deg)!=2 or not all(math.isfinite(v) for v in targets_deg):
+        raise ValueError('需要两个有限目标角度')
+    if not math.isfinite(speed_rpm) or not 0.01<=speed_rpm<=100:
+        raise ValueError('实际输出轴速度须在0.01～100rpm内')
+    targets=[round(v*1000) for v in targets_deg]
+    if any(not -(2**31)<=v<2**31 for v in targets):raise ValueError('角度超出协议范围')
+    data=struct.pack('>Hii',int(math.floor(speed_rpm*100+.5)),*targets)
+    if tolerance_deg is not None:
+        if not math.isfinite(tolerance_deg) or not .01<=tolerance_deg<=.5:raise ValueError('终点容差须为0.01～0.5°')
+        data+=struct.pack('>H',int(math.floor(tolerance_deg*1000+.5)))
+    return build_request(1,CMD_MOVE_AXES_POINT,data,parameter=0x4A50)
 
 
 def build_motion_profile(device_id: int, accel_ms: int, decel_ms: int, s_curve_ms: int) -> bytes:

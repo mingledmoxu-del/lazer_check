@@ -1,0 +1,73 @@
+{
+  "version": "3.9.3",
+  "hardware_tested": false,
+  "python_tests": 219,
+  "c_test_groups": 15,
+  "gui_construction_checked": true,
+  "log_batch_retention_checked": true,
+  "vectors_valid": true,
+  "initial_sp": "0x20020000",
+  "reset_vector": "0x8006e15",
+  "joint_gui_speed_unit": "actual_output_rpm",
+  "joint_gui_speed_range": [
+    0.01,
+    100
+  ],
+  "joint_gui_default_rpm": 0.1,
+  "default_dual_tolerance_deg": 0.2,
+  "files": {
+    "LightCheck.bin": {
+      "bytes": 130724,
+      "sha256": "02ab0e693e16d015beeaff645015fbe5166e756610103ef7799914ebdac25cfe"
+    },
+    "LightCheck.elf": {
+      "bytes": 2537428,
+      "sha256": "3217aa6a152e7db3ddd78a4d3ff4fec92a55dcbe1b7ac611bb00e9c4c4193951"
+    },
+    "LightCheck.hex": {
+      "bytes": 367749,
+      "sha256": "5176815e363b97b14726048060fd8750da3526a525496864e60879fdf515f476"
+    },
+    "README.md": {
+      "bytes": 1334,
+      "sha256": "ec31570aac1e13e0d7a894734e9c041558bfdd9b63413601339d469ded1dde53"
+    },
+    "upper-computer-sdk-source.zip": {
+      "bytes": 268538,
+      "sha256": "c3966f58c0889c9f859d00b81497fcf785adbb849a0eeb5e2f3702d6d7da15a9"
+    }
+  },
+  "firmware_sources": {
+    "LightCheck/Communication/Inc/axis_guard.h": "94b1d465c07cd24f3caeeae10e476f5791deacea5484500b309c32d118064f1f",
+    "LightCheck/Communication/Inc/axis_guard_controller.h": "39fd604178d3f6142545b2c8c6a83f7bfbc584d41f515129be42db7642f927a5",
+    "LightCheck/Communication/Inc/axis_motion.h": "c15b76ef5af413d3f297c55460d62f950a6094e846de8aab71783932182f8139",
+    "LightCheck/Communication/Inc/command_manager.h": "e8467e7661a7d5b81cb8f970f1c98ed3b51d55354fa70adf7a7f5ddb6e36d153",
+    "LightCheck/Communication/Inc/crc16.h": "ddb66d54b1247458cad915bfcdd295dc34ffea9b8b57ea8363422d90f4c63c1b",
+    "LightCheck/Communication/Inc/limit_debug.h": "d7325c2118cb28c8dadb82b0663b40780ee1d2a44a446a32c8f488c6fe04f053",
+    "LightCheck/Communication/Inc/limit_switch.h": "292d8c06fb937c04563f97b201cc3029bf890dda4e67948c0e9e1685c45fc711",
+    "LightCheck/Communication/Inc/modbus_rtu.h": "2cce11770d4c7fbbd63b96fcfd65f47319a214f83d102309ad48a7b36ba5bb65",
+    "LightCheck/Communication/Inc/motor_config.h": "491d1c79ed9e315ae713bfedee5f0f5b9a736f71e47b3f936f7a9ff04082bbd2",
+    "LightCheck/Communication/Inc/pc_comm.h": "c4f8023f54f7421572202997c5287e553adf52e3371ac9cedad3b3d75a1515ed",
+    "LightCheck/Communication/Inc/pc_protocol.h": "3d677b8c34099de151a87fbe986ec8c732419a823f53ff66c9bc8d96444cea91",
+    "LightCheck/Communication/Inc/rs485.h": "3599bd7fcb9af79082c2a753bd92e3699a9bd4ec45bc0f797336d63b5177da56",
+    "LightCheck/Communication/Inc/trajectory.h": "d909f15557f38ce4621422e101f6208aafab6c4fe02ecfd8731f3aca90824442",
+    "LightCheck/Communication/Src/axis_guard.c": "5f3461ae3528df2a1ac60594a1a0f23b5b0a5a898068e861c992217375cb131a",
+    "LightCheck/Communication/Src/axis_guard_controller.c": "ed5af8015f2a3b72f1428611b4426a271714b24687a172bca3a0cfb3c0dfbb78",
+    "LightCheck/Communication/Src/axis_motion.c": "0ea1a54e02513fe16a873975156820fde4f6171c6aa1524433dbbcd2d282458b",
+    "LightCheck/Communication/Src/command_manager.c": "be2f378851ac4a596ecb24180fbc679cd4571b1e11ccc9cf118a24b65b3d8b05",
+    "LightCheck/Communication/Src/crc16.c": "ae92b7a92d923dd37dd90952cec3027a0d333f401943102250ad67ef29d250c7",
+    "LightCheck/Communication/Src/limit_debug.c": "865981a9d3bfbbe7e70abcd8e08f673f510db23f77ae266efef99f4100f89685",
+    "LightCheck/Communication/Src/limit_switch.c": "6e78793d8387489cf40506d4e169f5d76688be071ace7ef6a23c685e537f6e3d",
+    "LightCheck/Communication/Src/modbus_rtu.c": "f8f69c4f03e668a3f147e7fc963f6293da658879440593d092a87246372cb298",
+    "LightCheck/Communication/Src/pc_comm.c": "4975cdd18cbbb7d3f5b3ba69a657585acd9c778807e451530f3fbce2255d894d",
+    "LightCheck/Communication/Src/pc_protocol.c": "67af142c1137518afd7cd379c0c053e9244660374d49ba94fecfea0bc9f1cc87",
+    "LightCheck/Communication/Src/rs485.c": "5cc14d8cd11c29b13506e8dc05dd0401040ee74881800c995289c6747805b6ac",
+    "LightCheck/Communication/Src/trajectory.c": "2d4f3fbe478cbc93b1e8276dd09733bdb32ac043306cc1eb868a3fbd82bb42b2",
+    "LightCheck/Motor_driver/Inc/p100s.h": "34770d3b4033503a68e56c4a317b5a9b1291ba3c5bd44562afad1152bd33c6d7",
+    "LightCheck/Motor_driver/Inc/p100s_bench.h": "8d82f093db426d3b75b9d99e3bd664815653bebec8cce8180984a91c2095d6d7",
+    "LightCheck/Motor_driver/Inc/p100s_console.h": "e386af936ce2ba50000be6f1f396e13dc3924c7691229b033626de50fae0643a",
+    "LightCheck/Motor_driver/Src/p100s.c": "c5b6731855d5080580a29bbc4a4fdc063aafea3fc5b836810816b381e4548e67",
+    "LightCheck/Motor_driver/Src/p100s_bench.c": "eeb21d6e3b6da800af9373ee8c6a489f57ea2cf44242dcabd62469bfbc89b964",
+    "LightCheck/Motor_driver/Src/p100s_console.c": "ab3c7097891b43282623cdddbbee2c2161e6ddfa639dfae044d973f021b6c52b"
+  }
+}
