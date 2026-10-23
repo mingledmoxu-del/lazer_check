@@ -1,0 +1,18 @@
+{
+  "host_version": "3.8.8",
+  "firmware_version": "3.8.7",
+  "firmware_changed": false,
+  "python_tests": 191,
+  "hardware_tested": false,
+  "gui_construction_checked": true,
+  "files": {
+    "README.md": {
+      "bytes": 4127,
+      "sha256": "430d128fb7b4904fd1ce02b94626738fe6a14519e0c2eeef6dbf220a5910034c"
+    },
+    "upper-computer-sdk-source.zip": {
+      "bytes": 136910,
+      "sha256": "f4221aa80fc8555e823a7d5f2a569d3bdd12f5b71b9bd7b0fe0c468d85f48b97"
+    }
+  }
+}

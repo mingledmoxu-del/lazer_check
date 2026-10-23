@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+from pathlib import Path
+from timing import MotionTiming
 import math
 import struct
 import time
@@ -51,7 +54,9 @@ class SimpleServoApp:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("P100S 电机控制 v3.8.7 · 主网口TCP / 平滑起步与停稳完成反馈")
+        self._timing=MotionTiming(Path(__file__).parent/'logs'/'motion_timing.jsonl',
+            lambda row:self._log('TIMING '+json.dumps(row,ensure_ascii=False)))
+        self.root.title("P100S 电机控制 v3.8.8 · 主网口TCP / 指令耗时日志")
         self.root.geometry("1000x900")
         self.root.minsize(960, 740)
 
@@ -412,6 +417,7 @@ class SimpleServoApp:
         self._show_limit_mode()
 
     def _disconnect(self) -> None:
+        if getattr(self,'_timing',None):self._timing.finish_all('connection_closed',execution_state='unknown_if_unfinished')
         # Preserve active_motor until the existing disconnect stop has been sent.
         business=getattr(self,"business_panel",None)
         if getattr(self,"trajectory_panel",None):
@@ -504,6 +510,7 @@ class SimpleServoApp:
         if motion is None:
             return
         device_id = self.motor_id.get()
+        if getattr(self,'_timing',None):self._timing.begin(device_id,'gui_angle_move')
         self.motion_generation=getattr(self,"motion_generation",0)+1
         self.stop_zero_samples=0
         self.queued_motion = (device_id, direction, motion)
@@ -781,6 +788,7 @@ class SimpleServoApp:
             if command in (CMD_MOVE_RELATIVE,CMD_MOVE_OUTPUT_RELATIVE):
                 self.active_motor=frame[3]
                 self._lock_auto_axis(True)
+            if getattr(self,'_timing',None):self._timing.sent(frame)
             self.port.write(frame)
             if command in (CMD_MOVE_RELATIVE,CMD_MOVE_OUTPUT_RELATIVE,0x22,0x28,0x17):
                 self.last_motion_sent_at=time.monotonic()
@@ -805,6 +813,7 @@ class SimpleServoApp:
                     for packet in self.parser.feed(raw):
                         self._handle_response(packet)
                 if self.pending is not None and time.monotonic() - self.pending[2] > self.RESPONSE_TIMEOUT_S:
+                    if getattr(self,'_timing',None):self._timing.finish(self.pending[0],'response_timeout',command=self.pending[1])
                     command = self.pending[1]
                     self.pending = None
                     self.deferred_send = None
@@ -850,6 +859,7 @@ class SimpleServoApp:
         self.pending = None
         self.pending_background = False
         self.pending_parameter = None
+        if getattr(self,'_timing',None):self._timing.received(packet)
         if packet.ok and packet.command in (0x22,0x25) and getattr(self,"trajectory_panel",None):
             self.trajectory_panel.invalidate()
         if getattr(self,"business_panel",None) and self.business_panel.handle(packet):return
@@ -957,6 +967,7 @@ class SimpleServoApp:
             elif self.stop_waiting:
                 self.stop_zero_samples=getattr(self,"stop_zero_samples",0)+1 if speed==0 else 0
                 if self.stop_zero_samples >= 2:
+                    if getattr(self,'_timing',None):self._timing.stop_confirmed(packet.device_id)
                     self.stop_waiting = False
                     self.monitor_until = 0.0
                     self.motion_seen_running = False

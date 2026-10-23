@@ -182,6 +182,7 @@ class DebugPanel:
             home=build_dual_home(-1,speed_deg_s=speed*6,max_travel_deg=45,timeout_s=120,raised_only=True)
             if not self.ready(1):return
             if not messagebox.askyesno("回到 +35°",f"本次速度：{speed:g}输出轴rpm（{speed*6:g}°/秒）。\n已有有效参考：按现有坐标定位，停止保留参考。\n没有参考：从接近水平、两限位未触发处寻找DI0建立参考。确认执行？",parent=self.window):return
+            if getattr(self.app,'_timing',None):self.app._timing.begin(1,'gui_reset_axis1',35)
             self.start_error=None
             self.app._stop()
             self.after_stop=(1,"raised_home",(speed,[(config,"应用实测双限位与反向抬头配置"),
@@ -195,6 +196,7 @@ class DebugPanel:
             if not math.isfinite(target): raise ValueError("目标角度无效")
             if not self.ready(axis): return
             if not messagebox.askyesno("坐标定位",f"确认 Motor {axis} 移动到软件坐标 {target:g}°？",parent=self.window): return
+            if getattr(self.app,'_timing',None):self.app._timing.begin(axis,'gui_move_to_angle',target)
             self.goto_speed=speed_rpm
             self.app._stop()
             self.after_stop=(axis,"goto",target)
