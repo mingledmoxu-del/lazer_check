@@ -8,7 +8,7 @@
 #include "axis_guard.h"
 /* All sessions share one controller; a transport loss latches stops for both axes. */
 #include "trajectory.h"
-#define POINT_BANK_SLOTS 4U
+#define POINT_BANK_SLOTS PC_POINT_BANK_SLOTS
 #define POINT_BANK_CAPACITY 16U
 typedef struct {
     uint32_t token;

@@ -56,13 +56,22 @@ int main(void)
     input_key(&p,PC_CMD_MOVE_AXES_POINT,12,PC_AXES_POINT_KEY);assert(last.valid_payload);
     input_key(&p,PC_CMD_BANK_BEGIN,9,1);assert(last.valid_payload);
     input_key(&p,PC_CMD_BANK_BEGIN,7,1);assert(!last.valid_payload);
-    input_key(&p,PC_CMD_BANK_BEGIN,9,5);assert(!last.valid_payload);
+    input_key(&p,PC_CMD_BANK_BEGIN,9,7);assert(!last.valid_payload);
     input_key(&p,PC_CMD_BANK_POINT,13,2);assert(last.valid_payload);
     input_key(&p,PC_CMD_BANK_POINT,12,2);assert(!last.valid_payload);
     input_key(&p,PC_CMD_BANK_SEAL,4,1);assert(last.valid_payload);
     input_key(&p,PC_CMD_BANK_RUN,5,1);assert(last.valid_payload);
     input_key(&p,PC_CMD_BANK_RUN,4,1);assert(!last.valid_payload);
     input_key(&p,PC_CMD_BANK_STATUS,0,1);assert(last.valid_payload);
+    for (uint16_t slot=1;slot<=6;++slot) {
+        const uint8_t sizes[5]={9,13,4,5,0};
+        for (uint8_t n=0;n<5;++n) {
+            uint8_t op=(uint8_t)(PC_CMD_BANK_BEGIN+n);
+            input_key(&p,op,sizes[n],slot);assert(last.valid_payload);
+            input_key(&p,op,sizes[n],7);assert(!last.valid_payload);
+            input_key(&p,op,sizes[n],0);assert(!last.valid_payload);
+        }
+    }
     uint8_t axes[9]={0xAA,0x55,6,1,PC_CMD_READ_AXES,0,0,0,0};
     uint16_t axes_crc=CRC16_Modbus(axes,7);axes[7]=(uint8_t)axes_crc;axes[8]=(uint8_t)(axes_crc>>8);
     PC_Protocol_Input(&p,axes,sizeof(axes));assert(last.valid_payload && last.command==PC_CMD_READ_AXES);

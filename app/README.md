@@ -1,5 +1,7 @@
 # 双 P100S 电机上位机与 Python 控制接口
 
+**当前v3.9.4，六套库需配套新固件。** 业务软件选好任意1～16个双轴点，`prepare_point_scan()`预载；`move_next_and_wait()`逐点运行并实读停稳，`confirm_acquisition()`记录业务采集判断，通过后仍需显式再调用下一点。可预载6套不同长度路线，没有自动跳点或内置激光采集。[接入文档](../docs/业务上位机_预载与激光逐点采集API.md) · [示例](examples/point_scan_business.py) · [发布包](../output/firmware/v3.9.4-six-bank-scan-h7/README.md)。下方为历史版本。
+
 **当前v3.9.3，配套重烧固件。** 双轴准备改为参数块读取并合并重复空闲检查；GUI日志批量刷新、最多显示2000行，详细计时JSONL保留；同包两轴统一发送/应答时间戳，修复v3.9.2 CSV字段漏同步导致的只有表头。真实rpm、±0.2°、预载/API保持。[说明](../docs/v3.9.3_缩短应答准备与日志阻塞.md) · [发布包](../output/firmware/v3.9.3-block-preflight-h7/README.md)。下方为历史版本。
 
 **当前 v3.9.2，配套更新固件。** 联动/预载页改为直接填写真实输出轴rpm，范围0.01～100，默认0.1；取消旧1.5限制及÷6规则。SDK双轴/预载的speed_rpm原本就是实际rpm；复位页沿用自身速度规则。增加板端双轴准备/应答其余两列与CSV字段，减少应答前重复通信。[说明](../docs/v3.9.2_实际rpm与应答分段计时.md) · [发布包](../output/firmware/v3.9.2-actual-rpm-h7/README.md)。下方为历史说明。

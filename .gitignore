@@ -31,6 +31,7 @@ logs/
 !/output/firmware/v3.9.1-preloaded-points-h7/
 !/output/firmware/v3.9.2-actual-rpm-h7/
 !/output/firmware/v3.9.3-block-preflight-h7/
+!/output/firmware/v3.9.4-six-bank-scan-h7/
 !/output/upper-computer/
 /output/upper-computer/*
 !/output/upper-computer/v3.8.8-motion-timing/

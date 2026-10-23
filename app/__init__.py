@@ -7,6 +7,7 @@ from .motor_controller import (
 )
 from .trajectory import TrajectoryPoint, TrajectoryStatus, AxisPosition, joint_ellipse
 from .faults import FaultAdvice, FaultReport, get_fault_advice, explain_error
+from .point_scan import PointScan
 
 __all__ = [
     "MotorController", "MotorError", "CommunicationError", "CommandRejected",
@@ -14,4 +15,5 @@ __all__ = [
     "PositionFeedback", "GuardConfig",
     "TrajectoryPoint", "TrajectoryStatus", "AxisPosition", "joint_ellipse",
     "FaultAdvice", "FaultReport", "get_fault_advice", "explain_error",
+    "PointScan",
 ]

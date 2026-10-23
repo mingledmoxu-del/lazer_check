@@ -57,6 +57,7 @@
 #define PC_CMD_BANK_SEAL  0x42U
 #define PC_CMD_BANK_RUN   0x43U
 #define PC_CMD_BANK_STATUS 0x44U
+#define PC_POINT_BANK_SLOTS 6U
 #define PC_PROTOCOL_MAX_DATA  40U
 
 typedef enum {

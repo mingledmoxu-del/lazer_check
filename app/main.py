@@ -58,7 +58,7 @@ class SimpleServoApp:
         self._log_after=None
         self._timing=MotionTiming(Path(__file__).parent/'logs'/'motion_timing.jsonl',
             lambda row:self._log('TIMING '+json.dumps(row,ensure_ascii=False)))
-        self.root.title("P100S 电机控制 v3.9.3 · 主网口TCP / 参数块读取与联动计时")
+        self.root.title("P100S 电机控制 v3.9.4 · 主网口TCP / 六套预载与采集逐点控制")
         self.root.geometry("1000x900")
         self.root.minsize(960, 740)
 

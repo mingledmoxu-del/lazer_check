@@ -13,7 +13,7 @@ PRESETS = {
 }
 
 def _identity(slot,token):
-    if isinstance(slot,bool) or not isinstance(slot,int) or not 1<=slot<=4:raise ValueError('点位库编号须为1～4')
+    if isinstance(slot,bool) or not isinstance(slot,int) or not 1<=slot<=6:raise ValueError('点位库编号须为1～6（库5、6需要v3.9.4固件）')
     if isinstance(token,bool) or not isinstance(token,int) or not 1<=token<=0xFFFFFFFF:raise ValueError('预载令牌须为非零uint32')
 
 def begin_route(slot,token,points,speed_rpm,*,tolerance_deg=.2):

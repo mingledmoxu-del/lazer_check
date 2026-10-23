@@ -169,6 +169,8 @@ class MotorController:
         self._stop_versions={1:0,2:0}
         self._timing=MotionTiming(timing_log,timing_callback)
         self._preloaded_routes={}
+        self._connection_generation=0
+        self._point_scan_owner=None
 
     @staticmethod
     def _axis(motor_id: int) -> None:
@@ -206,6 +208,7 @@ class MotorController:
                         pass
                 raise CommunicationError(f"连接失败: {exc}") from exc
             self._port = port
+            self._connection_generation+=1
             self._parser.reset()
             self._faulted = False
             return self
@@ -800,7 +803,7 @@ class MotorController:
     def preload_route(self, points, *, route_id: int = 1, speed_rpm: float = .1, tolerance_deg: float = .2, token=None):
         """v3.9.1：预载1～16个两轴绝对点；不启动，速度为真实输出轴rpm。
 
-        板端有4个RAM库，覆盖同编号库需新令牌；封存要求两轴有参考且停稳。
+        v3.9.4板端有6个RAM库，覆盖同编号库需新令牌；封存要求两轴有参考且停稳。
         """
         from .point_bank import upload_frames,decode_route
         points=tuple(tuple(p) for p in points)
@@ -824,6 +827,19 @@ class MotorController:
         packet=self._request(route_status(route_id))
         try:return dict(route_id=route_id,**decode_route(packet.data))
         except ValueError as exc:raise MotorError(str(exc)) from exc
+
+    def prepare_point_scan(self, points, *, name: str = '', route_id: int = 1,
+                           speed_rpm: float = .1, tolerance_deg: float = .2, token=None):
+        """业务层选好1～16个双轴点后预载；返回等待采集确认的逐点流程，不运动。
+
+        可分别向库1～6预载不同长度路线。下一点必须在上一点实际到位、
+        业务层显式确认采集通过后再次调用；没有自动跳点或自动重试。
+        """
+        from .point_scan import PointScan
+        if not isinstance(name,str):raise ValueError('name 须为字符串')
+        record=self.preload_route(points,route_id=route_id,speed_rpm=speed_rpm,
+                                  tolerance_deg=tolerance_deg,token=token)
+        return PointScan(self,record,name=name)
 
     def run_preloaded_point(self, route_id: int, point_index: int, *, token=None):
         """只运行一个预载点；完成后等下一条指令，不自动顺序运行。"""

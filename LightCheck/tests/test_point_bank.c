@@ -62,7 +62,7 @@ int main(void)
     bank(PC_CMD_BANK_SEAL,1,124,0,0,0);assert(reply==PC_STATUS_RANGE && !manager.point_banks[0].ready);
     assert(!manager.point_active[0] && !last_speed[0] && !last_speed[1]);
     bank(PC_CMD_BANK_BEGIN,1,125,17,0,0);assert(reply==PC_STATUS_ILLEGAL_PARAM);
-    bank(PC_CMD_BANK_BEGIN,5,125,6,0,0);assert(reply==PC_STATUS_ILLEGAL_PARAM);
+    bank(PC_CMD_BANK_BEGIN,7,125,6,0,0);assert(reply==PC_STATUS_ILLEGAL_PARAM);
 
     setup_bank();upload(1,123);request(2,PC_CMD_SET_ZERO);
     assert(!manager.point_banks[0].ready); /* Reference command invalidates banks even at the same encoder count. */
@@ -88,6 +88,25 @@ int main(void)
     for (unsigned i=0;i<2;++i) motors[i].status.position=manager.point_target[i]+300; /* 0.216 degree. */
     now+=50;Command_Manager_Task(&manager);
     assert(!(Command_Manager_PointFlags(&manager,0)&0x40) && manager.point_active[0]);
-    puts("point banks: preload without motion, four slots, indexed run, nonce, partial upload, reference/reset invalidation passed");
+    setup_bank();
+    for (uint16_t slot=1;slot<=6;++slot) upload(slot,1000U+slot);
+    for (uint16_t slot=1;slot<=6;++slot) {
+        assert(manager.point_banks[slot-1].token==1000U+slot && manager.point_banks[slot-1].ready);
+        bank(PC_CMD_BANK_RUN,slot,1000U+slot,1,0,0);
+        assert(reply==PC_STATUS_SUCCESS && manager.point_active[0]);
+        request(1,PC_CMD_MOTOR_STOP);request(2,PC_CMD_MOTOR_STOP);
+    }
+    setup_bank();
+    for (uint8_t count=6;count<=16;count+=2) {
+        uint32_t token=100U+count;
+        bank(PC_CMD_BANK_BEGIN,6,token,count,0,0);assert(reply==PC_STATUS_SUCCESS);
+        for (uint8_t n=0;n<count;++n) {
+            bank(PC_CMD_BANK_POINT,6,token,n,(n%3)*1000,0);assert(reply==PC_STATUS_SUCCESS);
+        }
+        bank(PC_CMD_BANK_SEAL,6,token,0,0,0);assert(reply==PC_STATUS_SUCCESS);
+        bank(PC_CMD_BANK_RUN,6,token,(uint8_t)(count-1),0,0);assert(reply==PC_STATUS_SUCCESS);
+        request(1,PC_CMD_MOTOR_STOP);request(2,PC_CMD_MOTOR_STOP);
+    }
+    puts("point banks: six independent slots, 6/8/10/12/14/16 points, indexed run and invalidation passed");
     return 0;
 }
