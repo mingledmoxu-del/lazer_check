@@ -104,6 +104,14 @@ class PositionFeedback:
     motor_rpm: int
 
     @property
+    def point_active(self) -> bool:
+        return bool(self.flags & 0x20)
+
+    @property
+    def point_completed(self) -> bool:
+        return bool(self.flags & 0x40) and not self.point_active
+
+    @property
     def counts_per_motor_rev(self) -> int | None:
         if self.display_mode in (2, 3):
             return self.command_counts_per_rev or None
@@ -495,11 +503,12 @@ class MotorController:
         """读取STM32缓存状态，不额外查询驱动器；旧固件会拒绝0x34。"""
         return self._trajectory_data(self._request(build_request(1,CMD_TRAJECTORY_STATUS)))
 
-    def get_axis_positions(self):
+    def get_axis_positions(self, *, fresh: bool = False):
         """两轴位置及采样年龄；运行复用缓存，停机重新读驱动器。角度无效返回None。
         年龄从驱动器反馈应答完成计时，两轴并非同时采样。需要配套新固件。
         """
-        packet=self._request(build_request(1,CMD_READ_AXES))
+        if type(fresh) is not bool:raise ValueError("fresh 必须为 bool")
+        packet=self._request(build_request(1,CMD_READ_AXES,parameter=0x4652 if fresh else 0))
         try: return decode_axes(self._data(packet,40))
         except ValueError as exc: raise CommunicationError(str(exc)) from exc
 
@@ -755,12 +764,47 @@ class MotorController:
             if feedback.output_angle_deg is None or feedback.fault:
                 self.stop(motor_id)
                 raise MotorError("等待到位失败：参考失效或存在保护故障；未重新建立坐标")
-            reached=abs(feedback.output_angle_deg-angle_deg)<=tolerance_deg and feedback.motor_rpm==0 and not feedback.flags&16
+            reached=abs(feedback.output_angle_deg-angle_deg)<=tolerance_deg and feedback.motor_rpm==0 and not feedback.flags&0x30
+            if reached and feedback.flags&0x40:return feedback  # Firmware already sampled two actual zeros.
             settled=settled+1 if reached else 0
             if settled>=2:return feedback
-            time.sleep(0.1)
+            time.sleep(0.05 if feedback.flags&0x20 else 0.1)
         self.stop(motor_id)
         raise MotorError("定位等待超时，已请求停止；未重发运动或清除参考")
+
+    def wait_for_axes(self, targets_deg, *, tolerance_deg: float = 0.1, timeout_s: float = 120):
+        """v3.8.7：单个请求实读两轴并核验位置、零速、报警及任务完成。
+
+        不发运动；新固件已确认完成时直接使用该证据，否则要求两轮直接反馈。
+        """
+        self._action_timeout(timeout_s)
+        if len(targets_deg)!=2 or not all(math.isfinite(x) for x in targets_deg):
+            raise ValueError("targets_deg 须包含两轴有限目标角度")
+        if not math.isfinite(tolerance_deg) or tolerance_deg<=0:raise ValueError("容差须为有限正数")
+        deadline=time.monotonic()+timeout_s;zeros=0;versions=dict(self._stop_versions)
+        while time.monotonic()<deadline:
+            if versions!=self._stop_versions:raise MotorError("两轴到位等待已被停止操作取消")
+            try:poses=self.get_axis_positions(fresh=True)
+            except MotorError:
+                self._request_pair_stop()
+                raise
+            if any(not p.usable or p.guard_fault or p.alarm_code for p in poses):
+                self._request_pair_stop()
+                raise MotorError("两轴反馈、参考或保护异常；已请求停止")
+            reached=all(p.source==0 and p.sample_age_ms<=200 and abs(p.angle_deg-target)<=tolerance_deg and
+                        p.motor_rpm==0 and not p.flags&0x30 for p,target in zip(poses,targets_deg))
+            zeros=zeros+1 if reached else 0
+            if reached and (all(p.flags&0x40 for p in poses) or zeros>=2):return poses
+            time.sleep(0.02 if reached else 0.05)
+        self._request_pair_stop()
+        raise MotorError("两轴到位等待超时；已请求停止，未重发运动")
+
+    def _request_pair_stop(self):
+        # One offline axis must not prevent attempting the other stop. Failure
+        # remains uncertain; the original feedback error is preserved.
+        for axis in (1,2):
+            try:self.stop(axis,wait=False)
+            except MotorError:pass
 
     def reset_axis1(self, *, speed_rpm: float = 0.6, timeout_s: float = 120) -> PositionFeedback:
         """有参考直接回+35°；无参考才搜索DI0。实际rpm=speed_rpm/6，阻塞到完成。"""

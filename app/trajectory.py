@@ -23,6 +23,14 @@ class AxisPosition:
     def usable(self):
         return self.angle_deg is not None and self.source != 2 and self.sample_age_ms <= 1000
 
+    @property
+    def point_active(self):
+        return bool(self.flags & 0x20)
+
+    @property
+    def point_completed(self):
+        return bool(self.flags & 0x40) and not self.point_active
+
 def decode_axes(data):
     if len(data) != 40: raise ValueError("两轴位置数据长度错误")
     axes=[]

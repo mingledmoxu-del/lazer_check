@@ -25,6 +25,8 @@ int main(void)
         input(&p,op,0);assert(last.valid_payload);input(&p,op,1);assert(!last.valid_payload);
     }
     input(&p,PC_CMD_READ_AXES,0);assert(!last.valid_payload); /* parameter must be zero */
+    input_key(&p,PC_CMD_READ_AXES,0,0x4652);assert(last.valid_payload);
+    input_key(&p,PC_CMD_READ_AXES,1,0x4652);assert(!last.valid_payload);
     input(&p,PC_CMD_TRAJECTORY_CLEAR,0);assert(last.valid_payload);
     input(&p,PC_CMD_TRAJECTORY_CLEAR,1);assert(!last.valid_payload);
     input(&p,PC_CMD_SET_REFERENCE,4);assert(last.valid_payload && last.data_length==4);

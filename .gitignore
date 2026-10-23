@@ -25,3 +25,4 @@ build/
 !/output/firmware/
 /output/firmware/*
 !/output/firmware/v3.8.6-fast-settle-h7/
+!/output/firmware/v3.8.7-smooth-completion-h7/

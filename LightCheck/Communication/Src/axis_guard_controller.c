@@ -486,7 +486,7 @@ void GuardController_Command(command_manager_t *m, const pc_command_packet_t *c)
             }
             p32(data,m->motors[i]->status.position);p32(data+4,m->motors[i]->status.command_position);p32(data+8,m->motors[i]->status.position_error);
             p16(data+12,mode);p16(data+14,ppr);p16(data+16,bits);p32(data+18,angle);
-            p16(data+22,(uint16_t)(g->zero_valid | (g->soft_on<<1) | ((g->hardware_on || g->dual_enabled)<<2) | (g->confirmed<<3) | (g->stop_pending<<4)));
+            p16(data+22,(uint16_t)(g->zero_valid | (g->soft_on<<1) | ((g->hardware_on || g->dual_enabled)<<2) | (g->confirmed<<3) | (g->stop_pending<<4) | Command_Manager_PointFlags(m,(uint8_t)i)));
             data[24]=m->guard_inputs.raw;
             for (unsigned ch=0;ch<6;++ch) data[25]|=(uint8_t)(AxisGuard_Active(&m->guard_inputs,g,(uint8_t)ch)<<ch);
             data[26]=g->phase;data[27]=g->fault;p32(data+28,g->origin);

@@ -68,7 +68,7 @@ static void parse(pc_protocol_t *p)
             case PC_CMD_TRAJECTORY_STOP:
             case PC_CMD_TRAJECTORY_KEEPALIVE: c.valid_payload=(uint8_t)(data_len==0U); break;
             case PC_CMD_TRAJECTORY_CLEAR: c.valid_payload=(uint8_t)(data_len==0U); break;
-            case PC_CMD_READ_AXES: c.valid_payload=(uint8_t)(data_len==0U && c.parameter==0U); break;
+            case PC_CMD_READ_AXES: c.valid_payload=(uint8_t)(data_len==0U && (c.parameter==0U || c.parameter==0x4652U)); break;
             case PC_CMD_WRITE_PA:       c.valid_payload = (uint8_t)(data_len == 3U); break;
             case PC_CMD_READ_PA:
             case PC_CMD_SERVO_ON:

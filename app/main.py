@@ -51,7 +51,7 @@ class SimpleServoApp:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("P100S 电机控制 v3.8.6 · 主网口TCP / 快速到位与停止确认")
+        self.root.title("P100S 电机控制 v3.8.7 · 主网口TCP / 平滑起步与停稳完成反馈")
         self.root.geometry("1000x900")
         self.root.minsize(960, 740)
 

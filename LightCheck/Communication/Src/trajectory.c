@@ -245,14 +245,16 @@ static void axes_reply(command_manager_t *m,const pc_command_packet_t *c)
     for (unsigned i=0;i<2;++i) {
         axis_guard_t *g=&m->guard[i];uint16_t mode=3U,ppr=g->ppr;
         uint8_t valid=t->sample_valid[i];int32_t angle=0;
-        uint8_t point_cached=(uint8_t)(m->point_active[i] && m->point_sample_valid[i] &&
+        uint8_t point_cached=(uint8_t)(!c->parameter && m->point_active[i] && m->point_sample_valid[i] &&
             HAL_GetTick()-m->point_sample_at[i]<=200U);
         if (point_cached) {
             valid=1U;ppr=m->point_ppr[i];t->sampled_at[i]=m->point_sample_at[i];
-        } else if (!cached) {
+        } else if (!cached || c->parameter==0x4652U) {
             valid=(uint8_t)(p100s_read_status(m->motors[i])==MODBUS_OK);
             if (valid) { t->sampled_at[i]=HAL_GetTick();
-                valid=(uint8_t)(p100s_read_parameter(m->motors[i],P100S_GROUP_P3,32U,&mode)==MODBUS_OK &&
+                if ((m->point_active[i] || m->point_completed[i]) && m->point_sample_valid[i] &&
+                    HAL_GetTick()-m->point_units_at[i]<1000U) { mode=3U;ppr=m->point_ppr[i]; }
+                else valid=(uint8_t)(p100s_read_parameter(m->motors[i],P100S_GROUP_P3,32U,&mode)==MODBUS_OK &&
                     p100s_read_parameter(m->motors[i],P100S_GROUP_PA,11U,&ppr)==MODBUS_OK); }
             t->sample_valid[i]=valid;
         }
@@ -264,16 +266,16 @@ static void axes_reply(command_manager_t *m,const pc_command_packet_t *c)
         unsigned n=i*20U;
         put32(data+n,(uint32_t)angle);put32(data+n+4,(uint32_t)m->motors[i]->status.position);
         put16(data+n+8,(uint16_t)m->motors[i]->status.speed_raw);
-        put16(data+n+10,(uint16_t)(referenced | (g->soft_on<<1) | ((g->hardware_on || g->dual_enabled)<<2) | (g->stop_pending<<4)));
+        put16(data+n+10,(uint16_t)(referenced | (g->soft_on<<1) | ((g->hardware_on || g->dual_enabled)<<2) | (g->stop_pending<<4) | Command_Manager_PointFlags(m,(uint8_t)i)));
         /* Age is measured from completion of the drive's feedback reply, not
            an assertion that two sequential encoder reads were simultaneous. */
         put32(data+n+12,valid ? HAL_GetTick()-t->sampled_at[i] : UINT32_MAX);
         put16(data+n+16,m->motors[i]->status.alarm_code);
-        data[n+18]=g->fault;data[n+19]=valid ? (uint8_t)(cached || point_cached) : 2U;
+        data[n+18]=g->fault;data[n+19]=valid ? (uint8_t)(!c->parameter && (cached || point_cached)) : 2U;
     }
     for (unsigned i=0;i<2;++i)
         put32(data+i*20U+12U,data[i*20U+19U]!=2U ? HAL_GetTick()-t->sampled_at[i] : UINT32_MAX);
-    (void)PC_Comm_SendResponseData(c->device_id,c->command,PC_STATUS_SUCCESS,0U,data,sizeof(data));
+    (void)PC_Comm_SendResponseData(c->device_id,c->command,PC_STATUS_SUCCESS,c->parameter,data,sizeof(data));
 }
 void Trajectory_Command(command_manager_t *m,const pc_command_packet_t *c)
 {

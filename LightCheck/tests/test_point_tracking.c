@@ -32,6 +32,8 @@ int main(void)
 {
     setup_point();unsigned old_triggers=triggers[1];
     move_point(5000);assert(reply==PC_STATUS_SUCCESS && manager.point_active[1]);
+    tick_point();assert(last_speed[1]>0 && last_speed[1]<manager.point_max_rpm[1]); /* No speed step. */
+    assert(Command_Manager_PointFlags(&manager,1U)==0x20U);
     for (unsigned n=0;n<15;++n) tick_point();
     assert(last_speed[1]>0 && motors[1].status.position>0);
     unsigned feedback_reads=status_read_count[1];
@@ -49,6 +51,12 @@ int main(void)
     assert(!manager.point_active[1] && !last_speed[1] && manager.guard[1].fault==GUARD_OK);
     int64_t error=(int64_t)motors[1].status.position-manager.point_target[1];
     assert(error>=-51 && error<=51 && manager.guard[1].zero_valid);
+    assert(Command_Manager_PointFlags(&manager,1U)==0x40U);
+    pc_command_packet_t fresh={0};fresh.device_id=1U;fresh.command=PC_CMD_READ_AXES;
+    fresh.parameter=0x4652U;fresh.valid_payload=1U;
+    feedback_reads=status_read_count[1];Command_Process(&manager,&fresh);
+    assert(response[39]==0U && status_read_count[1]>feedback_reads); /* Forced real drive reply. */
+    request(2U,PC_CMD_MOTOR_STOP);assert(!Command_Manager_PointFlags(&manager,1U));
     assert(triggers[1]==old_triggers); /* No HOLD release / CTRG replay / P4 task. */
 
     /* Fast configured point under a finite drive deceleration model. */

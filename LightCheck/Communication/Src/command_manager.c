@@ -275,6 +275,7 @@ modbus_result_t Command_Manager_PrepareVelocity(command_manager_t *m, uint8_t in
 {
     if (index>1U || limit_blocked(m,index)) return MODBUS_ERROR_BUSY;
     m->position_watch[index]=0U;
+    m->point_completed[index]=0U;
     return prepare_speed(m->motors[index]);
 }
 modbus_result_t Command_Manager_UpdateVelocity(command_manager_t *m, uint8_t index, int16_t rpm)
@@ -390,7 +391,19 @@ modbus_result_t Command_Manager_StopAxis(command_manager_t *m, uint8_t i)
 {
     m->position_watch[i]=0U;
     m->point_active[i]=0U;
+    m->point_completed[i]=0U;m->point_settling[i]=0U;
     return stop_motor(m->motors[i]);
+}
+
+uint16_t Command_Manager_PointFlags(command_manager_t *m,uint8_t i)
+{
+    uint16_t flags=m->point_active[i] ? 0x20U : 0U;
+    int64_t error=(int64_t)m->motors[i]->status.position-m->point_target[i];
+    int64_t tolerance=m->point_ppr[i]/200U+1U;
+    if (m->point_completed[i] && !m->point_active[i] && m->guard[i].zero_valid &&
+        !m->guard[i].fault && !m->guard[i].stop_pending && !m->motors[i]->status.alarm_code &&
+        m->motors[i]->status.speed_raw==0 && error>=-tolerance && error<=tolerance) flags|=0x40U;
+    return flags;
 }
 
 /* Latest typed target owns the axis. Do not release/resume an old P4 segment:
@@ -445,6 +458,7 @@ static modbus_result_t start_point(command_manager_t *m,uint8_t i,int16_t rpm,in
     if (r==MODBUS_OK && (control!=1U || source!=1U)) r=MODBUS_ERROR_ARGUMENT;
     if (r!=MODBUS_OK) { point_fault(m,i,GUARD_COMM);return r; }
     m->position_watch[i]=0U;m->point_active[i]=1U;m->point_zero_samples[i]=0U;
+    m->point_settling[i]=0U;m->point_completed[i]=0U;
     m->point_target[i]=(int32_t)target;m->point_last[i]=motor->status.position;
     m->point_progress_position[i]=motor->status.position;
     m->point_max_rpm[i]=rpm;m->point_sent_rpm[i]=0;m->point_ppr[i]=ppr;
@@ -497,7 +511,21 @@ static void point_task(command_manager_t *m)
         /* About 0.036 output degrees with PA11=10000 and a 50:1 gearbox. */
         uint32_t tolerance=ppr/200U+1U;
         int16_t desired=0;
-        if (distance>tolerance) {
+        if (distance<=tolerance) m->point_settling[i]=1U;
+        if (m->point_settling[i]) {
+            /* Hold zero while braking; do not chase encoder jitter or start
+               a correction from a single rounded zero-speed observation. */
+            if (!m->point_sent_rpm[i] && motor->status.speed_raw==0)
+                ++m->point_zero_samples[i];
+            else m->point_zero_samples[i]=0U;
+            if (m->point_zero_samples[i]>=2U) {
+                if (distance<=tolerance) {
+                    m->point_active[i]=0U;m->point_completed[i]=1U;
+                } else {
+                    m->point_settling[i]=0U;m->point_zero_samples[i]=0U;
+                }
+            }
+        } else if (distance>tolerance) {
             uint32_t reaction=(HAL_GetTick()-previous_sample)*2U+20U;
             if (reaction<100U) reaction=100U;
             if (reaction>1000U) reaction=1000U;
@@ -506,20 +534,33 @@ static void point_task(command_manager_t *m)
             desired=(int16_t)(error<0 ? -speed : speed);
             if (HAL_GetTick()-m->point_progress_at[i]>3000U) { point_fault(m,i,GUARD_EXECUTION);continue; }
             m->point_zero_samples[i]=0U;
-        } else if (motor->status.speed_raw==0) {
-            if (++m->point_zero_samples[i]>=2U) m->point_active[i]=0U;
-        } else m->point_zero_samples[i]=0U;
+        }
         /* If a small overshoot needs correction, first command zero and wait
            for real zero speed. Do not classify normal braking as wrong-way. */
         if (motor->status.speed_raw && (m->point_sent_rpm[i]==0 ||
             (int32_t)desired*m->point_sent_rpm[i]<0)) desired=0;
+        /* Ramp up over approximately 200 ms rather than stepping immediately
+           to the requested speed. Braking remains unconstrained so existing
+           distance/limit protection can always reduce speed immediately. */
+        int32_t sent=m->point_sent_rpm[i];
+        if ((int32_t)desired*sent<0) desired=0;
+        else if ((desired<0 ? -desired : desired)>(sent<0 ? -sent : sent)) {
+            uint32_t dt=HAL_GetTick()-previous_sample;
+            if (dt>100U) dt=100U;
+            uint32_t rise=((uint32_t)m->point_max_rpm[i]*dt+199U)/200U;
+            if (!rise) rise=1U;
+            int32_t speed=(sent<0 ? -sent : sent)+(int32_t)rise;
+            int32_t target=desired<0 ? -desired : desired;
+            if (speed>target) speed=target;
+            desired=(int16_t)(desired<0 ? -speed : speed);
+        }
         if (desired!=m->point_sent_rpm[i]) {
             r=write_pa_temp_verified(motor,P100S_PA_INTERNAL_SPEED_1,(uint16_t)desired);
             if (r!=MODBUS_OK) { point_fault(m,i,GUARD_COMM);continue; }
             m->point_sent_rpm[i]=desired;
             m->point_last[i]=motor->status.position;
         }
-        m->point_poll_at[i]=HAL_GetTick()+50U;
+        m->point_poll_at[i]=HAL_GetTick()+(m->point_settling[i] ? 20U : 50U);
     }
     m->busy=0U;
 }
@@ -623,6 +664,7 @@ void Command_Manager_TransportLost(command_manager_t *m)
     for (uint8_t i=0;i<2;++i) {
         m->position_watch[i]=0U;
         m->point_active[i]=0U;
+        m->point_completed[i]=0U;
         GuardController_Cancel(m,i);
         m->continuous_active[i]=0;
         m->continuous_stop_pending[i]=1;

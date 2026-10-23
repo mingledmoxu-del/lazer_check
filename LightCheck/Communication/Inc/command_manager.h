@@ -33,6 +33,7 @@ typedef struct command_manager {
     uint16_t position_noise[2];
     uint32_t position_started_at[2], position_poll_at[2];
     uint8_t point_active[2], point_zero_samples[2];
+    uint8_t point_settling[2], point_completed[2];
     int32_t point_target[2], point_last[2], point_progress_position[2];
     int16_t point_max_rpm[2], point_sent_rpm[2];
     uint16_t point_ppr[2];
@@ -49,6 +50,7 @@ void Command_Process(void *context, const pc_command_packet_t *command);
 /* Sample only in the 1 ms SysTick interrupt; Modbus runs in the main loop. */
 void Command_Manager_SampleLimits(command_manager_t *manager, uint8_t limit1, uint8_t limit2);
 void Command_Manager_Task(command_manager_t *manager);
+uint16_t Command_Manager_PointFlags(command_manager_t *m, uint8_t index);
 void Command_Manager_SampleInputs(command_manager_t *manager, uint8_t raw_mask);
 modbus_result_t Command_Manager_PrepareVelocity(command_manager_t *m, uint8_t index);
 modbus_result_t Command_Manager_UpdateVelocity(command_manager_t *m, uint8_t index, int16_t rpm);
