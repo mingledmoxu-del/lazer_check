@@ -1,0 +1,15 @@
+{
+  "gui_version": "3.9.6",
+  "sdk_firmware_version": "3.9.4",
+  "firmware_changed": false,
+  "python_tests": 272,
+  "gui_smoke_test": true,
+  "fake_transport_workflow_test": true,
+  "hardware_tested": false,
+  "base_commit": "6d47a8ca81b8df29a5d317a9ec15f5b12dca28ab",
+  "source_zip": {
+    "name": "upper-computer-sdk-source.zip",
+    "bytes": 324547,
+    "sha256": "d73bb7e1b1ac343f5c89f8620dc629dc09802d1a3ba6e16eedc150aa12f04e40"
+  }
+}

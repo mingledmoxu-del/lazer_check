@@ -73,6 +73,10 @@ class TrajectoryPanel:
 
     def ready(self):
         a=self.app
+        timing=getattr(a,'_active_timing_panel',lambda:None)()
+        if timing and timing.phase:
+            messagebox.showwarning('测试进行中','先停止当前两轴测试，再操作连续轨迹。',parent=self.window)
+            return False
         busy=(getattr(a,"trajectory_running",False) or getattr(a,"home_running",False) or self.quick_phase or self.jobs or a.auto_motor is not None or
               a.active_motor is not None or a.stop_waiting or a.diagnostic_active or a.queued_motion or
               a.queued_auto is not None or a.parameter_check_queue or a.profile_read_queue or
@@ -291,8 +295,11 @@ class TrajectoryPanel:
     def start(self):
         if not self.ready():return
         if not self.sealed: self.error(ValueError("先上传并校验当前轨迹；改动参数后须重新上传"));return
+        generation,revision,session=self.quick_generation,self.revision,self.session
         if not messagebox.askyesno("两轴共同启动","确认两轴已建立参考、开启软范围并停在预览首点？\n"
             "本模式为RS485低频跟随试验，不保证5秒空间圆精度；请低幅度、长周期起步，人员避让并保留硬件急停。",parent=self.window):return
+        if (not self.sealed or generation!=self.quick_generation or revision!=self.revision or
+                session!=self.session or not self.ready()):return
         self._send_start()
 
     def read(self):
@@ -339,10 +346,10 @@ class TrajectoryPanel:
                 self.next_renew=now+0.75
                 a._send(build_request(1,CMD_TRAJECTORY_KEEPALIVE,parameter=self.session),CMD_TRAJECTORY_KEEPALIVE,"两轴轨迹心跳")
             elif getattr(self,"positions_text",None) and now>=self.next_positions:
-                self.next_positions=now+1
+                self.next_positions=now+getattr(self,'position_interval',1)
                 a._send(build_request(1,CMD_READ_AXES),CMD_READ_AXES,"读取控制反馈及采样年龄",background=True)
             elif now>=self.next_status:
-                self.next_status=now+0.5
+                self.next_status=now+getattr(self,'status_interval',.5)
                 a._send(build_request(1,CMD_TRAJECTORY_STATUS),CMD_TRAJECTORY_STATUS,"刷新两轴轨迹缓存状态",background=True)
                 return
             else:return

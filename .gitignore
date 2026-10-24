@@ -37,3 +37,4 @@ logs/
 !/output/upper-computer/v3.8.8-motion-timing/
 !/output/upper-computer/v3.8.9-joint-timing/
 !/output/upper-computer/v3.9.5-blade-simulation/
+!/output/upper-computer/v3.9.6-continuous-fan-circle/

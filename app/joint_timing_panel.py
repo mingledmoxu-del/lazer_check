@@ -98,10 +98,10 @@ class JointTimingPanel:
         if not messagebox.askyesno('开始两轴联动', f'执行{len(points)}段，两轴实际输出轴速度{speed:g}rpm。\n请确认两轴已有参考，且整段路径可运动。', parent=self.window): return
         self._begin_run(points,speed)
 
-    def _begin_run(self,points,speed,selection=None):
+    def _begin_run(self,points,speed,selection=None,*,append_records=False):
         self.run_selection=selection
         self.points=deque(points);self.speed_rpm=speed
-        if selection is None:
+        if selection is None and not append_records:
             self.rows=[];self.table.delete(*self.table.get_children());self.step=0
         else:self.step=len(self.rows)//2
         self.run_steps=0;self.run_started=time.monotonic();self.next_read=0

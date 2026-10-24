@@ -58,7 +58,7 @@ class SimpleServoApp:
         self._log_after=None
         self._timing=MotionTiming(Path(__file__).parent/'logs'/'motion_timing.jsonl',
             lambda row:self._log('TIMING '+json.dumps(row,ensure_ascii=False)))
-        self.root.title("P100S 电机控制 v3.9.5 · 主网口TCP / 六套预载与采集逐点控制")
+        self.root.title("P100S 电机控制 v3.9.6 · 主网口TCP / 连续圆周与点位测试")
         self.root.geometry("1000x900")
         self.root.minsize(960, 740)
 
@@ -95,6 +95,7 @@ class SimpleServoApp:
         self.business_panel = None
         self.joint_timing_panel = None
         self.blade_test_panel = None
+        self.fan_circle_panel = None
 
         self.port_name = tk.StringVar()
         self.connection_mode=tk.StringVar(value="TCP网口")
@@ -150,6 +151,7 @@ class SimpleServoApp:
         self.business_panel=BusinessPanel(self,outer)
         ttk.Button(outer,text="两轴联动计时 / 预载固定点位",command=self._open_joint_timing).pack(anchor="w",pady=4)
         ttk.Button(outer,text="模拟叶片经过 / 三点四点跟随测试",command=self._open_blade_test).pack(anchor="w",pady=4)
+        ttk.Button(outer,text="风扇几何 / 连续圆周测试",command=self._open_fan_circle).pack(anchor="w",pady=4)
         self.advanced_open=tk.BooleanVar(value=False)
         ttk.Checkbutton(outer,text="展开运动与参数调试",variable=self.advanced_open,
                         command=self._toggle_advanced).pack(anchor="w")
@@ -301,6 +303,17 @@ class SimpleServoApp:
         else:
             self.trajectory_panel.window.deiconify();self.trajectory_panel.window.lift()
 
+    def _open_fan_circle(self):
+        if self.fan_circle_panel is None:
+            if self.trajectory_panel is None:
+                from trajectory_panel import TrajectoryPanel
+                self.trajectory_panel=TrajectoryPanel(self)
+                self.trajectory_panel.window.withdraw()
+            from fan_circle_panel import FanCirclePanel
+            self.fan_circle_panel=FanCirclePanel(self,self.trajectory_panel)
+        else:
+            self.fan_circle_panel.window.deiconify();self.fan_circle_panel.window.lift()
+
     def _quick_dual_test(self) -> None:
         self._open_trajectory()
         self.trajectory_panel.quick_test()
@@ -443,6 +456,7 @@ class SimpleServoApp:
         self._show_limit_mode()
 
     def _disconnect(self) -> None:
+        if getattr(self,'fan_circle_panel',None):self.fan_circle_panel.interrupted('连接断开，实际状态需核查')
         if getattr(self,"blade_test_panel",None):self.blade_test_panel.disconnected()
         if getattr(self,"joint_timing_panel",None):self.joint_timing_panel.disconnected()
         if getattr(self,'_timing',None):self._timing.finish_all('connection_closed',execution_state='unknown_if_unfinished')
@@ -827,6 +841,7 @@ class SimpleServoApp:
                 self._lock_auto_axis(True)
             if getattr(self,'_timing',None):self._timing.sent(frame)
             self.port.write(frame)
+            if getattr(self,'fan_circle_panel',None):self.fan_circle_panel.sent(frame,time.monotonic())
             if command in (CMD_MOVE_RELATIVE,CMD_MOVE_OUTPUT_RELATIVE,0x22,0x28,0x17):
                 self.last_motion_sent_at=time.monotonic()
         except Exception as exc:
@@ -865,6 +880,7 @@ class SimpleServoApp:
                         self.diagnostic_active = False
                     self.result_text.set("通信超时：未收到 STM32 应答")
                     self._log(f"命令 0x{command:02X} 应答超时")
+                    if getattr(self,'fan_circle_panel',None):self.fan_circle_panel.interrupted('通信超时，任务状态未知')
                     if self._active_timing_panel():self._active_timing_panel().stop("通信应答超时，取消后续段")
                     if getattr(self,"debug_panel",None): self.debug_panel.cancel()
                     if getattr(self,"trajectory_panel",None):self.trajectory_panel.on_error()
@@ -904,7 +920,9 @@ class SimpleServoApp:
         self.pending_parameter = None
         if getattr(self,'_timing',None):self._timing.received(packet)
         joint=self._active_timing_panel()
-        if joint and joint.handle(packet):return
+        if joint and joint.handle(packet):
+            if getattr(self,'fan_circle_panel',None):self.fan_circle_panel.observe(packet)
+            return
         if packet.ok and packet.command in (0x22,0x25) and getattr(self,"trajectory_panel",None):
             self.trajectory_panel.invalidate()
         if getattr(self,"business_panel",None) and self.business_panel.handle(packet):return
@@ -915,6 +933,7 @@ class SimpleServoApp:
             self.parameter_check_queue = None
             self.profile_read_queue = None
         if getattr(self,"trajectory_panel",None) and self.trajectory_panel.handle(packet):
+            if getattr(self,'fan_circle_panel',None):self.fan_circle_panel.observe(packet)
             return
         if getattr(self,"debug_panel",None) and self.debug_panel.handle(packet):
             return
