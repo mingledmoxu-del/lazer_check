@@ -118,7 +118,8 @@ class DebugPanel:
 
     def ready(self,axis):
         a=self.app
-        joint=getattr(a,"joint_timing_panel",None)
+        joint=getattr(a,"blade_test_panel",None)
+        if not (joint and joint.phase):joint=getattr(a,"joint_timing_panel",None)
         if joint and joint.phase:
             messagebox.showwarning("联动计时中","请先停止两轴联动计时。",parent=self.window)
             return False
